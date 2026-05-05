@@ -91,10 +91,8 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     // initialize lsfg
     auto* lsfgInitialize = LSFG_3_1::initialize;
     auto* lsfgDeleteContext = LSFG_3_1::deleteContext;
-    if (conf.performance) {
         lsfgInitialize = LSFG_3_1P::initialize;
         lsfgDeleteContext = LSFG_3_1P::deleteContext;
-    }
 
     setenv("DISABLE_LSFG", "1", 1); // NOLINT
 
@@ -115,12 +113,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         outAhbs.push_back(this->out_n.at(i).getAhb());
 
     int32_t ctxId;
-    if (conf.performance)
         ctxId = LSFG_3_1P::createContextFromAHB(
-            this->frame_0.getAhb(), this->frame_1.getAhb(),
-            outAhbs, extent, format);
-    else
-        ctxId = LSFG_3_1::createContextFromAHB(
             this->frame_0.getAhb(), this->frame_1.getAhb(),
             outAhbs, extent, format);
 
@@ -157,11 +150,9 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     auto* lsfgInitialize = LSFG_3_1::initialize;
     auto* lsfgCreateContext = LSFG_3_1::createContext;
     auto* lsfgDeleteContext = LSFG_3_1::deleteContext;
-    if (conf.performance) {
         lsfgInitialize = LSFG_3_1P::initialize;
         lsfgCreateContext = LSFG_3_1P::createContext;
         lsfgDeleteContext = LSFG_3_1P::deleteContext;
-    }
 
     setenv("DISABLE_LSFG", "1", 1); // NOLINT
 
@@ -241,18 +232,12 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     // 2. Tell framegen to generate intermediary frames
     //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
     std::vector<int> noOutSems;  // empty
-    if (conf.performance)
         LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
-    else
-        LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
 
     // 3. Wait for framegen's GPU work to finish before reading output images.
     //    framegen uses its own VkDevice internally, so we need waitIdle()
     //    to ensure cross-device synchronization.
-    if (conf.performance)
         LSFG_3_1P::waitIdle();
-    else
-        LSFG_3_1::waitIdle();
 
     // 4. Copy generated frames to swapchain images and present them
     for (size_t i = 0; i < static_cast<size_t>(conf.multiplier - 1); i++) {
@@ -369,10 +354,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             pass.renderSemaphores.at(i).exportSyncFd(info.device, &renderSemaphoreFds.at(i));
         }
 
-        if (conf.performance)
             LSFG_3_1P::presentContext(*this->lsfgCtxId, preCopySemaphoreFd, renderSemaphoreFds);
-        else
-            LSFG_3_1::presentContext(*this->lsfgCtxId, preCopySemaphoreFd, renderSemaphoreFds);
 
         // Immediate cleanup of FDs to try and stretch the life of the process
         for (int &fd : renderSemaphoreFds) { if (fd >= 0) { close(fd); fd = -1; } }
