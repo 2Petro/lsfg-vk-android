@@ -13,6 +13,11 @@ if(LSFGVK_ANDROID_WINE)
     add_compile_definitions(LSFGVK_ANDROID_WINE=1)
 endif()
 
+if(LSFGVK_ANDROID_WINE OR ANDROID)
+    add_compile_definitions(VK_USE_PLATFORM_ANDROID_KHR=1)
+endif()
+
+
 # subprojects
 add_compile_options(-fPIC
     -Wno-deprecated-declarations
@@ -41,6 +46,7 @@ file(GLOB SOURCES
 add_library(lsfg-vk SHARED ${SOURCES})
 
 # target
+#target_compile_definitions(lsfg-vk-framegen PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
 set_target_properties(lsfg-vk PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON)
@@ -48,10 +54,11 @@ target_include_directories(lsfg-vk
     PRIVATE include)
 target_link_libraries(lsfg-vk PRIVATE
     pe-parse dxbc toml11
-    lsfg-vk-framegen)
+    lsfg-vk-framegen )
 
 if(ANDROID)
-    target_link_libraries(lsfg-vk PRIVATE android)
+    target_link_libraries(lsfg-vk PRIVATE android log)
+    target_compile_definitions(lsfg-vk-framegen PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
     target_include_directories(lsfg-vk PRIVATE "${ANDROID_NDK}/sources/android/native_app_glue")
 endif()
 
