@@ -33,6 +33,8 @@ namespace {
             pCreateInfo->ppEnabledExtensionNames,
             pCreateInfo->enabledExtensionCount,
             {
+		"VK_KHR_surface",
+                "VK_KHR_android_surface",
                 "VK_KHR_get_physical_device_properties2",
                 "VK_KHR_external_memory_capabilities",
                 "VK_KHR_external_semaphore_capabilities"
@@ -66,6 +68,7 @@ namespace {
             pCreateInfo->ppEnabledExtensionNames,
             pCreateInfo->enabledExtensionCount,
             {
+		"VK_KHR_swapchain",
                 "VK_KHR_external_memory",
                 "VK_KHR_external_memory_fd",
                 "VK_KHR_external_semaphore",
