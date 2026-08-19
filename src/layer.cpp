@@ -16,71 +16,87 @@
 #include <iostream>
 #include <cstdint>
 #include <string>
+#include <vector>
+#include <mutex>
+#include <cstring>
 
 namespace {
-    PFN_vkCreateInstance  next_vkCreateInstance{};
-    PFN_vkDestroyInstance next_vkDestroyInstance{};
+    struct InstanceDispatchTable {
+        PFN_vkGetInstanceProcAddr gpa{nullptr};
+        PFN_vkDestroyInstance DestroyInstance{nullptr};
+        PFN_vkCreateDevice CreateDevice{nullptr};
+        PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties{nullptr};
+        PFN_vkGetPhysicalDeviceMemoryProperties GetPhysicalDeviceMemoryProperties{nullptr};
+        PFN_vkGetPhysicalDeviceProperties GetPhysicalDeviceProperties{nullptr};
+        PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR GetPhysicalDeviceSurfaceCapabilitiesKHR{nullptr};
+        PFN_vkEnumeratePhysicalDevices EnumeratePhysicalDevices{nullptr};
+    };
 
-    PFN_vkCreateDevice  next_vkCreateDevice{};
-    PFN_vkDestroyDevice next_vkDestroyDevice{};
-
-    PFN_vkSetDeviceLoaderData next_vSetDeviceLoaderData{};
-
-    PFN_vkGetInstanceProcAddr next_vkGetInstanceProcAddr{};
-    PFN_vkGetDeviceProcAddr   next_vkGetDeviceProcAddr{};
-
-    PFN_vkGetPhysicalDeviceQueueFamilyProperties next_vkGetPhysicalDeviceQueueFamilyProperties{};
-    PFN_vkGetPhysicalDeviceMemoryProperties next_vkGetPhysicalDeviceMemoryProperties{};
-    PFN_vkGetPhysicalDeviceProperties next_vkGetPhysicalDeviceProperties{};
-    PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR next_vkGetPhysicalDeviceSurfaceCapabilitiesKHR{};
-
-    PFN_vkCreateSwapchainKHR  next_vkCreateSwapchainKHR{};
-    PFN_vkQueuePresentKHR     next_vkQueuePresentKHR{};
-    PFN_vkDestroySwapchainKHR next_vkDestroySwapchainKHR{};
-    PFN_vkGetSwapchainImagesKHR  next_vkGetSwapchainImagesKHR{};
-    PFN_vkAllocateCommandBuffers next_vkAllocateCommandBuffers{};
-    PFN_vkFreeCommandBuffers     next_vkFreeCommandBuffers{};
-    PFN_vkBeginCommandBuffer next_vkBeginCommandBuffer{};
-    PFN_vkEndCommandBuffer   next_vkEndCommandBuffer{};
-    PFN_vkCreateCommandPool  next_vkCreateCommandPool{};
-    PFN_vkDestroyCommandPool next_vkDestroyCommandPool{};
-    PFN_vkCreateImage  next_vkCreateImage{};
-    PFN_vkDestroyImage next_vkDestroyImage{};
-    PFN_vkGetImageMemoryRequirements next_vkGetImageMemoryRequirements{};
-    PFN_vkBindImageMemory next_vkBindImageMemory{};
-    PFN_vkAllocateMemory  next_vkAllocateMemory{};
-    PFN_vkFreeMemory next_vkFreeMemory{};
-    PFN_vkCreateSemaphore  next_vkCreateSemaphore{};
-    PFN_vkDestroySemaphore next_vkDestroySemaphore{};
-    PFN_vkGetMemoryFdKHR next_vkGetMemoryFdKHR{};
-    PFN_vkGetSemaphoreFdKHR next_vkGetSemaphoreFdKHR{};
+    struct DeviceDispatchTable {
+        PFN_vkGetDeviceProcAddr gpa{nullptr};
+        PFN_vkSetDeviceLoaderData setDeviceLoaderData{nullptr};
+        PFN_vkDestroyDevice DestroyDevice{nullptr};
+        PFN_vkCreateSwapchainKHR CreateSwapchainKHR{nullptr};
+        PFN_vkQueuePresentKHR QueuePresentKHR{nullptr};
+        PFN_vkDestroySwapchainKHR DestroySwapchainKHR{nullptr};
+        PFN_vkGetSwapchainImagesKHR GetSwapchainImagesKHR{nullptr};
+        PFN_vkAllocateCommandBuffers AllocateCommandBuffers{nullptr};
+        PFN_vkFreeCommandBuffers FreeCommandBuffers{nullptr};
+        PFN_vkBeginCommandBuffer BeginCommandBuffer{nullptr};
+        PFN_vkEndCommandBuffer EndCommandBuffer{nullptr};
+        PFN_vkCreateCommandPool CreateCommandPool{nullptr};
+        PFN_vkDestroyCommandPool DestroyCommandPool{nullptr};
+        PFN_vkCreateImage CreateImage{nullptr};
+        PFN_vkDestroyImage DestroyImage{nullptr};
+        PFN_vkGetImageMemoryRequirements GetImageMemoryRequirements{nullptr};
+        PFN_vkBindImageMemory BindImageMemory{nullptr};
+        PFN_vkAllocateMemory AllocateMemory{nullptr};
+        PFN_vkFreeMemory FreeMemory{nullptr};
+        PFN_vkCreateSemaphore CreateSemaphore{nullptr};
+        PFN_vkDestroySemaphore DestroySemaphore{nullptr};
+        PFN_vkGetMemoryFdKHR GetMemoryFdKHR{nullptr};
+        PFN_vkGetSemaphoreFdKHR GetSemaphoreFdKHR{nullptr};
 #ifdef __ANDROID__
-    PFN_vkGetAndroidHardwareBufferPropertiesANDROID next_vkGetAndroidHardwareBufferPropertiesANDROID{};
+        PFN_vkGetAndroidHardwareBufferPropertiesANDROID GetAndroidHardwareBufferPropertiesANDROID{nullptr};
 #endif
-    PFN_vkGetDeviceQueue next_vkGetDeviceQueue{};
-    PFN_vkQueueSubmit next_vkQueueSubmit{};
-    PFN_vkCmdPipelineBarrier next_vkCmdPipelineBarrier{};
-    PFN_vkCmdBlitImage next_vkCmdBlitImage{};
-    PFN_vkAcquireNextImageKHR next_vkAcquireNextImageKHR{};
+        PFN_vkGetDeviceQueue GetDeviceQueue{nullptr};
+        PFN_vkQueueSubmit QueueSubmit{nullptr};
+        PFN_vkCmdPipelineBarrier CmdPipelineBarrier{nullptr};
+        PFN_vkCmdBlitImage CmdBlitImage{nullptr};
+        PFN_vkAcquireNextImageKHR AcquireNextImageKHR{nullptr};
+    };
 
-    template<typename T>
-    bool initInstanceFunc(VkInstance instance, const char* name, T* func) {
-        *func = reinterpret_cast<T>(next_vkGetInstanceProcAddr(instance, name));
-        if (!*func) {
-            std::cerr << "(no function pointer for " << name << ")\n";
-            return false;
-        }
-        return true;
+    std::mutex g_dispatch_mutex;
+    std::unordered_map<VkInstance, InstanceDispatchTable> g_instance_dispatch;
+    std::unordered_map<VkDevice, DeviceDispatchTable> g_device_dispatch;
+    std::unordered_map<VkPhysicalDevice, VkInstance> g_phys_device_to_instance;
+    std::unordered_map<VkQueue, VkDevice> g_queue_to_device;
+    std::unordered_map<VkCommandBuffer, VkDevice> g_cmdbuf_to_device;
+
+    thread_local PFN_vkGetInstanceProcAddr tls_next_gpa_instance = nullptr;
+    thread_local PFN_vkGetDeviceProcAddr tls_next_gpa_device = nullptr;
+    thread_local PFN_vkGetInstanceProcAddr tls_next_gipa_device_create = nullptr;
+    thread_local PFN_vkSetDeviceLoaderData tls_next_set_loader_data = nullptr;
+
+    InstanceDispatchTable* GetInstanceDispatchTable(VkInstance instance) {
+        std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+        auto it = g_instance_dispatch.find(instance);
+        if (it != g_instance_dispatch.end()) return &it->second;
+        return nullptr;
     }
 
-    template<typename T>
-    bool initDeviceFunc(VkDevice device, const char* name, T* func) {
-        *func = reinterpret_cast<T>(next_vkGetDeviceProcAddr(device, name));
-        if (!*func) {
-            std::cerr << "(no function pointer for " << name << ")\n";
-            return false;
-        }
-        return true;
+    DeviceDispatchTable* GetDeviceDispatchTable(VkDevice device) {
+        std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+        auto it = g_device_dispatch.find(device);
+        if (it != g_device_dispatch.end()) return &it->second;
+        return nullptr;
+    }
+
+    VkInstance GetInstanceFromPhysicalDevice(VkPhysicalDevice pd) {
+        std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+        auto it = g_phys_device_to_instance.find(pd);
+        if (it != g_phys_device_to_instance.end()) return it->second;
+        return nullptr;
     }
 }
 
@@ -90,7 +106,6 @@ namespace {
             const VkAllocationCallbacks* pAllocator,
             VkInstance* pInstance) {
         try {
-            // prepare layer | NOLINTBEGIN
             auto* layerDesc = const_cast<VkLayerInstanceCreateInfo*>(
                 reinterpret_cast<const VkLayerInstanceCreateInfo*>(pCreateInfo->pNext));
             while (layerDesc && (layerDesc->sType != VK_STRUCTURE_TYPE_LOADER_INSTANCE_CREATE_INFO
@@ -102,49 +117,55 @@ namespace {
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "No layer creation info found in pNext chain");
 
-            next_vkGetInstanceProcAddr = layerDesc->u.pLayerInfo->pfnNextGetInstanceProcAddr;
+            PFN_vkGetInstanceProcAddr next_gpa = layerDesc->u.pLayerInfo->pfnNextGetInstanceProcAddr;
             layerDesc->u.pLayerInfo = layerDesc->u.pLayerInfo->pNext;
 
-            bool success = initInstanceFunc(nullptr, "vkCreateInstance", &next_vkCreateInstance);
-            if (!success)
-                throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "Failed to get instance function pointer for vkCreateInstance");
+            tls_next_gpa_instance = next_gpa;
 
-            // NOLINTEND | skip initialization if the layer is disabled
             if (!Config::activeConf.enable) {
-                auto res = next_vkCreateInstance(pCreateInfo, pAllocator, pInstance);
-                initInstanceFunc(*pInstance, "vkCreateDevice", &next_vkCreateDevice);
-                return res;
+                auto next_createInstance = reinterpret_cast<PFN_vkCreateInstance>(
+                    next_gpa(nullptr, "vkCreateInstance"));
+                return next_createInstance(pCreateInfo, pAllocator, pInstance);
             }
 
-            // create instance
-            try {
-                auto* createInstanceHook = reinterpret_cast<PFN_vkCreateInstance>(
-                    Hooks::hooks["vkCreateInstance"]);
-                auto res = createInstanceHook(pCreateInfo, pAllocator, pInstance);
-                if (res != VK_SUCCESS)
-                    throw LSFG::vulkan_error(res, "Unknown error");
-            } catch (const std::exception& e) {
-                throw LSFG::rethrowable_error("Failed to create Vulkan instance", e);
+            auto* createInstanceHook = reinterpret_cast<PFN_vkCreateInstance>(
+                Hooks::hooks["vkCreateInstance"]);
+            auto res = createInstanceHook(pCreateInfo, pAllocator, pInstance);
+            if (res != VK_SUCCESS)
+                throw LSFG::vulkan_error(res, "Unknown error");
+
+            InstanceDispatchTable idt{};
+            idt.gpa = next_gpa;
+            idt.DestroyInstance = reinterpret_cast<PFN_vkDestroyInstance>(next_gpa(*pInstance, "vkDestroyInstance"));
+            idt.CreateDevice = reinterpret_cast<PFN_vkCreateDevice>(next_gpa(*pInstance, "vkCreateDevice"));
+            idt.GetPhysicalDeviceQueueFamilyProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
+            idt.GetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
+            idt.GetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceProperties"));
+            idt.GetPhysicalDeviceSurfaceCapabilitiesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(next_gpa(*pInstance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
+            idt.EnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(next_gpa(*pInstance, "vkEnumeratePhysicalDevices"));
+
+            {
+                std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                g_instance_dispatch[*pInstance] = idt;
             }
 
-            // get relevant function pointers from the next layer
-            success = true;
-            success &= initInstanceFunc(*pInstance,
-                "vkDestroyInstance", &next_vkDestroyInstance);
-            success &= initInstanceFunc(*pInstance,
-                "vkCreateDevice", &next_vkCreateDevice); // workaround mesa bug
-            success &= initInstanceFunc(*pInstance,
-                "vkGetPhysicalDeviceQueueFamilyProperties", &next_vkGetPhysicalDeviceQueueFamilyProperties);
-            success &= initInstanceFunc(*pInstance,
-                "vkGetPhysicalDeviceMemoryProperties", &next_vkGetPhysicalDeviceMemoryProperties);
-            success &= initInstanceFunc(*pInstance,
-                "vkGetPhysicalDeviceProperties", &next_vkGetPhysicalDeviceProperties);
-            success &= initInstanceFunc(*pInstance,
-                "vkGetPhysicalDeviceSurfaceCapabilitiesKHR", &next_vkGetPhysicalDeviceSurfaceCapabilitiesKHR);
-            if (!success)
-                throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "Failed to get instance function pointers");
+            if (idt.GetPhysicalDeviceProperties && idt.EnumeratePhysicalDevices) {
+                uint32_t deviceCount = 0;
+                if (idt.EnumeratePhysicalDevices(*pInstance, &deviceCount, nullptr) == VK_SUCCESS && deviceCount > 0) {
+                    std::vector<VkPhysicalDevice> physicalDevices(deviceCount);
+                    if (idt.EnumeratePhysicalDevices(*pInstance, &deviceCount, physicalDevices.data()) == VK_SUCCESS) {
+                        {
+                            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                            for (auto pd : physicalDevices) {
+                                g_phys_device_to_instance[pd] = *pInstance;
+                            }
+                        }
+                        VkPhysicalDeviceProperties deviceProps{};
+                        idt.GetPhysicalDeviceProperties(physicalDevices[0], &deviceProps);
+                        fprintf(stderr, "lsfg-vk: Active Vulkan Driver/Device Name -> %s\n", deviceProps.deviceName);
+                    }
+                }
+            }
 
             std::cerr << "lsfg-vk: Vulkan instance layer initialized successfully.\n";
         } catch (const std::exception& e) {
@@ -155,13 +176,12 @@ namespace {
         return VK_SUCCESS;
     }
 
-    VkResult layer_vkCreateDevice( // NOLINTBEGIN
+    VkResult layer_vkCreateDevice(
             VkPhysicalDevice physicalDevice,
             const VkDeviceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDevice* pDevice) {
         try {
-            // prepare layer | NOLINTBEGIN
             auto* layerDesc = const_cast<VkLayerDeviceCreateInfo*>(
                 reinterpret_cast<const VkLayerDeviceCreateInfo*>(pCreateInfo->pNext));
             while (layerDesc && (layerDesc->sType != VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO
@@ -173,78 +193,80 @@ namespace {
                 throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
                     "No layer creation info found in pNext chain");
 
-            next_vkGetDeviceProcAddr = layerDesc->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+            PFN_vkGetDeviceProcAddr next_gpa = layerDesc->u.pLayerInfo->pfnNextGetDeviceProcAddr;
+            PFN_vkGetInstanceProcAddr next_gipa = layerDesc->u.pLayerInfo->pfnNextGetInstanceProcAddr;
             layerDesc->u.pLayerInfo = layerDesc->u.pLayerInfo->pNext;
 
             auto* layerDesc2 = const_cast<VkLayerDeviceCreateInfo*>(
                 reinterpret_cast<const VkLayerDeviceCreateInfo*>(pCreateInfo->pNext));
             while (layerDesc2 && (layerDesc2->sType != VK_STRUCTURE_TYPE_LOADER_DEVICE_CREATE_INFO
                     || layerDesc2->function != VK_LOADER_DATA_CALLBACK)) {
-                        layerDesc2 = const_cast<VkLayerDeviceCreateInfo*>(
-                            reinterpret_cast<const VkLayerDeviceCreateInfo*>(layerDesc2->pNext));
-            }
-            if (!layerDesc2)
-                throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "No layer device loader data found in pNext chain");
-
-            next_vSetDeviceLoaderData = layerDesc2->u.pfnSetDeviceLoaderData;
-
-            // NOLINTEND | skip initialization if the layer is disabled
-            if (!Config::activeConf.enable)
-                return next_vkCreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
-
-            // create device
-            try {
-                auto* createDeviceHook = reinterpret_cast<PFN_vkCreateDevice>(
-                    Hooks::hooks["vkCreateDevicePre"]);
-                auto res = createDeviceHook(physicalDevice, pCreateInfo, pAllocator, pDevice);
-                if (res != VK_SUCCESS)
-                    throw LSFG::vulkan_error(res, "Unknown error");
-            } catch (const std::exception& e) {
-                throw LSFG::rethrowable_error("Failed to create Vulkan device", e);
+                layerDesc2 = const_cast<VkLayerDeviceCreateInfo*>(
+                    reinterpret_cast<const VkLayerDeviceCreateInfo*>(layerDesc2->pNext));
             }
 
-            // get relevant function pointers from the next layer
-            bool success = true;
-            success &= initDeviceFunc(*pDevice, "vkDestroyDevice", &next_vkDestroyDevice);
-            success &= initDeviceFunc(*pDevice, "vkCreateSwapchainKHR", &next_vkCreateSwapchainKHR);
-            success &= initDeviceFunc(*pDevice, "vkQueuePresentKHR", &next_vkQueuePresentKHR);
-            success &= initDeviceFunc(*pDevice, "vkDestroySwapchainKHR", &next_vkDestroySwapchainKHR);
-            success &= initDeviceFunc(*pDevice, "vkGetSwapchainImagesKHR", &next_vkGetSwapchainImagesKHR);
-            success &= initDeviceFunc(*pDevice, "vkAllocateCommandBuffers", &next_vkAllocateCommandBuffers);
-            success &= initDeviceFunc(*pDevice, "vkFreeCommandBuffers", &next_vkFreeCommandBuffers);
-            success &= initDeviceFunc(*pDevice, "vkBeginCommandBuffer", &next_vkBeginCommandBuffer);
-            success &= initDeviceFunc(*pDevice, "vkEndCommandBuffer", &next_vkEndCommandBuffer);
-            success &= initDeviceFunc(*pDevice, "vkCreateCommandPool", &next_vkCreateCommandPool);
-            success &= initDeviceFunc(*pDevice, "vkDestroyCommandPool", &next_vkDestroyCommandPool);
-            success &= initDeviceFunc(*pDevice, "vkCreateImage", &next_vkCreateImage);
-            success &= initDeviceFunc(*pDevice, "vkDestroyImage", &next_vkDestroyImage);
-            success &= initDeviceFunc(*pDevice, "vkGetImageMemoryRequirements", &next_vkGetImageMemoryRequirements);
-            success &= initDeviceFunc(*pDevice, "vkBindImageMemory", &next_vkBindImageMemory);
-            success &= initDeviceFunc(*pDevice, "vkGetMemoryFdKHR", &next_vkGetMemoryFdKHR);
-            success &= initDeviceFunc(*pDevice, "vkAllocateMemory", &next_vkAllocateMemory);
-            success &= initDeviceFunc(*pDevice, "vkFreeMemory", &next_vkFreeMemory);
-            success &= initDeviceFunc(*pDevice, "vkCreateSemaphore", &next_vkCreateSemaphore);
-            success &= initDeviceFunc(*pDevice, "vkDestroySemaphore", &next_vkDestroySemaphore);
-            success &= initDeviceFunc(*pDevice, "vkGetSemaphoreFdKHR", &next_vkGetSemaphoreFdKHR);
+            tls_next_gpa_device = next_gpa;
+            tls_next_gipa_device_create = next_gipa;
+            tls_next_set_loader_data = layerDesc2 ? layerDesc2->u.pfnSetDeviceLoaderData : nullptr;
+
+            VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+
+            if (!Config::activeConf.enable) {
+                auto next_createDevice = reinterpret_cast<PFN_vkCreateDevice>(
+                    next_gipa(instance, "vkCreateDevice"));
+                return next_createDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
+            }
+
+            auto* createDeviceHook = reinterpret_cast<PFN_vkCreateDevice>(
+                Hooks::hooks["vkCreateDevicePre"]);
+            auto res = createDeviceHook(physicalDevice, pCreateInfo, pAllocator, pDevice);
+            if (res != VK_SUCCESS)
+                throw LSFG::vulkan_error(res, "Unknown error");
+
+            DeviceDispatchTable ddt{};
+            ddt.gpa = next_gpa;
+            ddt.setDeviceLoaderData = tls_next_set_loader_data;
+            ddt.DestroyDevice = reinterpret_cast<PFN_vkDestroyDevice>(next_gpa(*pDevice, "vkDestroyDevice"));
+            ddt.CreateSwapchainKHR = reinterpret_cast<PFN_vkCreateSwapchainKHR>(next_gpa(*pDevice, "vkCreateSwapchainKHR"));
+            ddt.QueuePresentKHR = reinterpret_cast<PFN_vkQueuePresentKHR>(next_gpa(*pDevice, "vkQueuePresentKHR"));
+            ddt.DestroySwapchainKHR = reinterpret_cast<PFN_vkDestroySwapchainKHR>(next_gpa(*pDevice, "vkDestroySwapchainKHR"));
+            ddt.GetSwapchainImagesKHR = reinterpret_cast<PFN_vkGetSwapchainImagesKHR>(next_gpa(*pDevice, "vkGetSwapchainImagesKHR"));
+            ddt.AllocateCommandBuffers = reinterpret_cast<PFN_vkAllocateCommandBuffers>(next_gpa(*pDevice, "vkAllocateCommandBuffers"));
+            ddt.FreeCommandBuffers = reinterpret_cast<PFN_vkFreeCommandBuffers>(next_gpa(*pDevice, "vkFreeCommandBuffers"));
+            ddt.BeginCommandBuffer = reinterpret_cast<PFN_vkBeginCommandBuffer>(next_gpa(*pDevice, "vkBeginCommandBuffer"));
+            ddt.EndCommandBuffer = reinterpret_cast<PFN_vkEndCommandBuffer>(next_gpa(*pDevice, "vkEndCommandBuffer"));
+            ddt.CreateCommandPool = reinterpret_cast<PFN_vkCreateCommandPool>(next_gpa(*pDevice, "vkCreateCommandPool"));
+            ddt.DestroyCommandPool = reinterpret_cast<PFN_vkDestroyCommandPool>(next_gpa(*pDevice, "vkDestroyCommandPool"));
+            ddt.CreateImage = reinterpret_cast<PFN_vkCreateImage>(next_gpa(*pDevice, "vkCreateImage"));
+            ddt.DestroyImage = reinterpret_cast<PFN_vkDestroyImage>(next_gpa(*pDevice, "vkDestroyImage"));
+            ddt.GetImageMemoryRequirements = reinterpret_cast<PFN_vkGetImageMemoryRequirements>(next_gpa(*pDevice, "vkGetImageMemoryRequirements"));
+            ddt.BindImageMemory = reinterpret_cast<PFN_vkBindImageMemory>(next_gpa(*pDevice, "vkBindImageMemory"));
+            ddt.GetMemoryFdKHR = reinterpret_cast<PFN_vkGetMemoryFdKHR>(next_gpa(*pDevice, "vkGetMemoryFdKHR"));
+            ddt.AllocateMemory = reinterpret_cast<PFN_vkAllocateMemory>(next_gpa(*pDevice, "vkAllocateMemory"));
+            ddt.FreeMemory = reinterpret_cast<PFN_vkFreeMemory>(next_gpa(*pDevice, "vkFreeMemory"));
+            ddt.CreateSemaphore = reinterpret_cast<PFN_vkCreateSemaphore>(next_gpa(*pDevice, "vkCreateSemaphore"));
+            ddt.DestroySemaphore = reinterpret_cast<PFN_vkDestroySemaphore>(next_gpa(*pDevice, "vkDestroySemaphore"));
+            ddt.GetSemaphoreFdKHR = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(next_gpa(*pDevice, "vkGetSemaphoreFdKHR"));
 #ifdef __ANDROID__
-            // AHB function is optional — not all ICDs (e.g. Vortek wrapper) support it.
-            // If unavailable, the AHB image path will fail at point-of-use, but
-            // the layer still initializes so it can fall back gracefully.
-            initDeviceFunc(*pDevice, "vkGetAndroidHardwareBufferPropertiesANDROID", &next_vkGetAndroidHardwareBufferPropertiesANDROID);
+            ddt.GetAndroidHardwareBufferPropertiesANDROID = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(next_gpa(*pDevice, "vkGetAndroidHardwareBufferPropertiesANDROID"));
+            if (!ddt.GetAndroidHardwareBufferPropertiesANDROID) {
+                std::cerr << "(no function pointer for vkGetAndroidHardwareBufferPropertiesANDROID)\n";
+            }
 #endif
-            success &= initDeviceFunc(*pDevice, "vkGetDeviceQueue", &next_vkGetDeviceQueue);
-            success &= initDeviceFunc(*pDevice, "vkQueueSubmit", &next_vkQueueSubmit);
-            success &= initDeviceFunc(*pDevice, "vkCmdPipelineBarrier", &next_vkCmdPipelineBarrier);
-            success &= initDeviceFunc(*pDevice, "vkCmdBlitImage", &next_vkCmdBlitImage);
-            success &= initDeviceFunc(*pDevice, "vkAcquireNextImageKHR", &next_vkAcquireNextImageKHR);
-            if (!success)
-                throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED,
-                    "Failed to get device function pointers");
+            ddt.GetDeviceQueue = reinterpret_cast<PFN_vkGetDeviceQueue>(next_gpa(*pDevice, "vkGetDeviceQueue"));
+            ddt.QueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(next_gpa(*pDevice, "vkQueueSubmit"));
+            ddt.CmdPipelineBarrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(next_gpa(*pDevice, "vkCmdPipelineBarrier"));
+            ddt.CmdBlitImage = reinterpret_cast<PFN_vkCmdBlitImage>(next_gpa(*pDevice, "vkCmdBlitImage"));
+            ddt.AcquireNextImageKHR = reinterpret_cast<PFN_vkAcquireNextImageKHR>(next_gpa(*pDevice, "vkAcquireNextImageKHR"));
+
+            {
+                std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                g_device_dispatch[*pDevice] = ddt;
+            }
 
             auto postCreateDeviceHook = reinterpret_cast<PFN_vkCreateDevice>(
                 Hooks::hooks["vkCreateDevicePost"]);
-            auto res = postCreateDeviceHook(physicalDevice, pCreateInfo, pAllocator, pDevice);
+            res = postCreateDeviceHook(physicalDevice, pCreateInfo, pAllocator, pDevice);
             if (res != VK_SUCCESS)
                 throw LSFG::vulkan_error(res, "Unknown error");
 
@@ -255,8 +277,13 @@ namespace {
             return VK_ERROR_INITIALIZATION_FAILED;
         }
         return VK_SUCCESS;
-    } // NOLINTEND
+    }
 }
+
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction VKAPI_CALL
+vkGetInstanceProcAddr(VkInstance instance, const char* pName);
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction VKAPI_CALL
+vkGetDeviceProcAddr(VkDevice device, const char* pName);
 
 const std::unordered_map<std::string, PFN_vkVoidFunction> layerFunctions = {
     { "vkCreateInstance",
@@ -269,44 +296,170 @@ const std::unordered_map<std::string, PFN_vkVoidFunction> layerFunctions = {
         reinterpret_cast<PFN_vkVoidFunction>(&layer_vkGetDeviceProcAddr) },
 };
 
-PFN_vkVoidFunction layer_vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
-    const std::string name(pName);
-    auto it = layerFunctions.find(name);
-    if (it != layerFunctions.end())
-        return it->second;
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction VKAPI_CALL
+vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
+    if (!pName) return nullptr;
 
-    it = Hooks::hooks.find(name);
-    if (it != Hooks::hooks.end() && Config::activeConf.enable)
-        return it->second;
+    auto it = layerFunctions.find(pName);
+    if (it != layerFunctions.end()) return it->second;
 
-    return next_vkGetInstanceProcAddr(instance, pName);
+    it = Hooks::hooks.find(pName);
+    if (it != Hooks::hooks.end() && Config::activeConf.enable) return it->second;
+
+    auto idt = GetInstanceDispatchTable(instance);
+    if (idt && idt->gpa) return idt->gpa(instance, pName);
+
+    return nullptr;
 }
 
-PFN_vkVoidFunction layer_vkGetDeviceProcAddr(VkDevice device, const char* pName) {
-    const std::string name(pName);
-    auto it = layerFunctions.find(name);
-    if (it != layerFunctions.end())
-        return it->second;
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction VKAPI_CALL
+vkGetDeviceProcAddr(VkDevice device, const char* pName) {
+    if (!pName) return nullptr;
 
-    it = Hooks::hooks.find(name);
-    if (it != Hooks::hooks.end() && Config::activeConf.enable)
-        return it->second;
+    auto it = layerFunctions.find(pName);
+    if (it != layerFunctions.end()) return it->second;
 
-    return next_vkGetDeviceProcAddr(device, pName);
+    it = Hooks::hooks.find(pName);
+    if (it != Hooks::hooks.end() && Config::activeConf.enable) return it->second;
+
+    auto ddt = GetDeviceDispatchTable(device);
+    if (ddt && ddt->gpa) return ddt->gpa(device, pName);
+
+    return nullptr;
 }
 
-// original functions
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateInstance(const VkInstanceCreateInfo* pCreateInfo,
+                 const VkAllocationCallbacks* pAllocator,
+                 VkInstance* pInstance) {
+    return layer_vkCreateInstance(pCreateInfo, pAllocator, pInstance);
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkCreateDevice(VkPhysicalDevice physicalDevice,
+               const VkDeviceCreateInfo* pCreateInfo,
+               const VkAllocationCallbacks* pAllocator,
+               VkDevice* pDevice) {
+    return layer_vkCreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateInstanceLayerProperties(uint32_t* pPropertyCount,
+                                   VkLayerProperties* pProperties) {
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!pProperties) {
+        *pPropertyCount = 1;
+        return VK_SUCCESS;
+    }
+    if (*pPropertyCount < 1) return VK_INCOMPLETE;
+
+    VkLayerProperties& prop = pProperties[0];
+    memset(&prop, 0, sizeof(prop));
+    strncpy(prop.layerName, "VK_LAYER_LS_frame_generation", VK_MAX_EXTENSION_NAME_SIZE - 1);
+    prop.specVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
+    prop.implementationVersion = 1;
+    strncpy(prop.description, "Lossless Scaling Vulkan layer", VK_MAX_DESCRIPTION_SIZE - 1);
+    *pPropertyCount = 1;
+    return VK_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateInstanceExtensionProperties(const char* pLayerName,
+                                       uint32_t* pPropertyCount,
+                                       VkExtensionProperties* pProperties) {
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (pLayerName && strcmp(pLayerName, "VK_LAYER_LS_frame_generation") != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+
+    if (!pProperties) {
+        *pPropertyCount = 0;
+        return VK_SUCCESS;
+    }
+    *pPropertyCount = 0;
+    return VK_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateDeviceExtensionProperties(VkPhysicalDevice physicalDevice,
+                                     const char* pLayerName,
+                                     uint32_t* pPropertyCount,
+                                     VkExtensionProperties* pProperties) {
+    (void)physicalDevice;
+    (void)pProperties;
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (pLayerName && strcmp(pLayerName, "VK_LAYER_LS_frame_generation") != 0)
+        return VK_ERROR_LAYER_NOT_PRESENT;
+
+    *pPropertyCount = 0;
+    return VK_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkEnumerateDeviceLayerProperties(VkPhysicalDevice physicalDevice,
+                                 uint32_t* pPropertyCount,
+                                 VkLayerProperties* pProperties) {
+    (void)physicalDevice;
+    if (!pPropertyCount) return VK_ERROR_INITIALIZATION_FAILED;
+    if (!pProperties) {
+        *pPropertyCount = 1;
+        return VK_SUCCESS;
+    }
+    if (*pPropertyCount < 1) return VK_INCOMPLETE;
+
+    VkLayerProperties& prop = pProperties[0];
+    memset(&prop, 0, sizeof(prop));
+    strncpy(prop.layerName, "VK_LAYER_LS_frame_generation", VK_MAX_EXTENSION_NAME_SIZE - 1);
+    prop.specVersion = VK_MAKE_API_VERSION(0, 1, 3, 0);
+    prop.implementationVersion = 1;
+    strncpy(prop.description, "Lossless Scaling Vulkan layer", VK_MAX_DESCRIPTION_SIZE - 1);
+    *pPropertyCount = 1;
+    return VK_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkSetDeviceLoaderData(VkDevice device, void* object) {
+    auto ddt = GetDeviceDispatchTable(device);
+    if (ddt && ddt->setDeviceLoaderData)
+        return ddt->setDeviceLoaderData(device, object);
+    return VK_SUCCESS;
+}
+
+extern "C" __attribute__((visibility("default"))) VKAPI_ATTR VkResult VKAPI_CALL
+vkNegotiateLoaderLayerInterfaceVersion(VkNegotiateLayerInterface* p) {
+    if (!p || p->sType != LAYER_NEGOTIATE_INTERFACE_STRUCT)
+        return VK_ERROR_INITIALIZATION_FAILED;
+
+    if (p->loaderLayerInterfaceVersion > 2)
+        p->loaderLayerInterfaceVersion = 2;
+
+    p->pfnGetInstanceProcAddr = vkGetInstanceProcAddr;
+    p->pfnGetDeviceProcAddr = vkGetDeviceProcAddr;
+    p->pfnGetPhysicalDeviceProcAddr = nullptr;
+
+    return VK_SUCCESS;
+}
+
 namespace Layer {
     VkResult ovkCreateInstance(
             const VkInstanceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkInstance* pInstance) {
-        return next_vkCreateInstance(pCreateInfo, pAllocator, pInstance);
+        if (!tls_next_gpa_instance) return VK_ERROR_INITIALIZATION_FAILED;
+        auto createInstanceFunc = reinterpret_cast<PFN_vkCreateInstance>(
+            tls_next_gpa_instance(nullptr, "vkCreateInstance"));
+        if (!createInstanceFunc) return VK_ERROR_INITIALIZATION_FAILED;
+        return createInstanceFunc(pCreateInfo, pAllocator, pInstance);
     }
+
     void ovkDestroyInstance(
             VkInstance instance,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroyInstance(instance, pAllocator);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->DestroyInstance) {
+            idt->DestroyInstance(instance, pAllocator);
+        }
+        std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+        g_instance_dispatch.erase(instance);
     }
 
     VkResult ovkCreateDevice(
@@ -314,50 +467,105 @@ namespace Layer {
             const VkDeviceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDevice* pDevice) {
-        return next_vkCreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+
+        if (tls_next_gipa_device_create) {
+            auto createDeviceFunc = reinterpret_cast<PFN_vkCreateDevice>(
+                tls_next_gipa_device_create(instance, "vkCreateDevice"));
+            if (createDeviceFunc) {
+                return createDeviceFunc(physicalDevice, pCreateInfo, pAllocator, pDevice);
+            }
+        }
+        
+        // Fallback to InstanceDispatchTable
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->CreateDevice) {
+            return idt->CreateDevice(physicalDevice, pCreateInfo, pAllocator, pDevice);
+        }
+        
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkDestroyDevice(
             VkDevice device,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroyDevice(device, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->DestroyDevice) {
+            ddt->DestroyDevice(device, pAllocator);
+        }
+        std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+        g_device_dispatch.erase(device);
     }
 
     VkResult ovkSetDeviceLoaderData(VkDevice device, void* object) {
-        return next_vSetDeviceLoaderData(device, object);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->setDeviceLoaderData) {
+            return ddt->setDeviceLoaderData(device, object);
+        }
+        return VK_SUCCESS;
     }
 
     PFN_vkVoidFunction ovkGetInstanceProcAddr(
             VkInstance instance,
             const char* pName) {
-        return next_vkGetInstanceProcAddr(instance, pName);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->gpa) {
+            return idt->gpa(instance, pName);
+        }
+        return nullptr;
     }
+
     PFN_vkVoidFunction ovkGetDeviceProcAddr(
             VkDevice device,
             const char* pName) {
-        return next_vkGetDeviceProcAddr(device, pName);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->gpa) {
+            return ddt->gpa(device, pName);
+        }
+        return nullptr;
     }
 
     void ovkGetPhysicalDeviceQueueFamilyProperties(
             VkPhysicalDevice physicalDevice,
             uint32_t* pQueueFamilyPropertyCount,
             VkQueueFamilyProperties* pQueueFamilyProperties) {
-        next_vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->GetPhysicalDeviceQueueFamilyProperties) {
+            idt->GetPhysicalDeviceQueueFamilyProperties(physicalDevice, pQueueFamilyPropertyCount, pQueueFamilyProperties);
+        }
     }
+
     void ovkGetPhysicalDeviceMemoryProperties(
             VkPhysicalDevice physicalDevice,
             VkPhysicalDeviceMemoryProperties* pMemoryProperties) {
-        next_vkGetPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->GetPhysicalDeviceMemoryProperties) {
+            idt->GetPhysicalDeviceMemoryProperties(physicalDevice, pMemoryProperties);
+        }
     }
+
     void ovkGetPhysicalDeviceProperties(
             VkPhysicalDevice physicalDevice,
             VkPhysicalDeviceProperties* pProperties) {
-        next_vkGetPhysicalDeviceProperties(physicalDevice, pProperties);
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->GetPhysicalDeviceProperties) {
+            idt->GetPhysicalDeviceProperties(physicalDevice, pProperties);
+        }
     }
+
     VkResult ovkGetPhysicalDeviceSurfaceCapabilitiesKHR(
             VkPhysicalDevice physicalDevice,
             VkSurfaceKHR surface,
             VkSurfaceCapabilitiesKHR* pSurfaceCapabilities) {
-        return next_vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, pSurfaceCapabilities);
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->GetPhysicalDeviceSurfaceCapabilitiesKHR) {
+            return idt->GetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, pSurfaceCapabilities);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     VkResult ovkCreateSwapchainKHR(
@@ -365,18 +573,37 @@ namespace Layer {
             const VkSwapchainCreateInfoKHR* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkSwapchainKHR* pSwapchain) {
-        return next_vkCreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CreateSwapchainKHR) {
+            return ddt->CreateSwapchainKHR(device, pCreateInfo, pAllocator, pSwapchain);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     VkResult ovkQueuePresentKHR(
             VkQueue queue,
             const VkPresentInfoKHR* pPresentInfo) {
-        return next_vkQueuePresentKHR(queue, pPresentInfo);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_queue_to_device.find(queue);
+            if (it != g_queue_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->QueuePresentKHR) {
+            return ddt->QueuePresentKHR(queue, pPresentInfo);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkDestroySwapchainKHR(
             VkDevice device,
             VkSwapchainKHR swapchain,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroySwapchainKHR(device, swapchain, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->DestroySwapchainKHR) {
+            ddt->DestroySwapchainKHR(device, swapchain, pAllocator);
+        }
     }
 
     VkResult ovkGetSwapchainImagesKHR(
@@ -384,31 +611,77 @@ namespace Layer {
             VkSwapchainKHR swapchain,
             uint32_t* pSwapchainImageCount,
             VkImage* pSwapchainImages) {
-        return next_vkGetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetSwapchainImagesKHR) {
+            return ddt->GetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     VkResult ovkAllocateCommandBuffers(
             VkDevice device,
             const VkCommandBufferAllocateInfo* pAllocateInfo,
             VkCommandBuffer* pCommandBuffers) {
-        return next_vkAllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->AllocateCommandBuffers) {
+            VkResult res = ddt->AllocateCommandBuffers(device, pAllocateInfo, pCommandBuffers);
+            if (res == VK_SUCCESS && pCommandBuffers && pAllocateInfo) {
+                std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                for (uint32_t i = 0; i < pAllocateInfo->commandBufferCount; ++i) {
+                    g_cmdbuf_to_device[pCommandBuffers[i]] = device;
+                }
+            }
+            return res;
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkFreeCommandBuffers(
             VkDevice device,
             VkCommandPool commandPool,
             uint32_t commandBufferCount,
             const VkCommandBuffer* pCommandBuffers) {
-        next_vkFreeCommandBuffers(device, commandPool, commandBufferCount, pCommandBuffers);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->FreeCommandBuffers) {
+            ddt->FreeCommandBuffers(device, commandPool, commandBufferCount, pCommandBuffers);
+            if (pCommandBuffers) {
+                std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                for (uint32_t i = 0; i < commandBufferCount; ++i) {
+                    g_cmdbuf_to_device.erase(pCommandBuffers[i]);
+                }
+            }
+        }
     }
 
     VkResult ovkBeginCommandBuffer(
             VkCommandBuffer commandBuffer,
             const VkCommandBufferBeginInfo* pBeginInfo) {
-        return next_vkBeginCommandBuffer(commandBuffer, pBeginInfo);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_cmdbuf_to_device.find(commandBuffer);
+            if (it != g_cmdbuf_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->BeginCommandBuffer) {
+            return ddt->BeginCommandBuffer(commandBuffer, pBeginInfo);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     VkResult ovkEndCommandBuffer(
             VkCommandBuffer commandBuffer) {
-        return next_vkEndCommandBuffer(commandBuffer);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_cmdbuf_to_device.find(commandBuffer);
+            if (it != g_cmdbuf_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->EndCommandBuffer) {
+            return ddt->EndCommandBuffer(commandBuffer);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     VkResult ovkCreateCommandPool(
@@ -416,13 +689,21 @@ namespace Layer {
             const VkCommandPoolCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkCommandPool* pCommandPool) {
-        return  next_vkCreateCommandPool(device, pCreateInfo, pAllocator, pCommandPool);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CreateCommandPool) {
+            return ddt->CreateCommandPool(device, pCreateInfo, pAllocator, pCommandPool);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkDestroyCommandPool(
             VkDevice device,
             VkCommandPool commandPool,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroyCommandPool(device, commandPool, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->DestroyCommandPool) {
+            ddt->DestroyCommandPool(device, commandPool, pAllocator);
+        }
     }
 
     VkResult ovkCreateImage(
@@ -430,27 +711,43 @@ namespace Layer {
             const VkImageCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkImage* pImage) {
-        return next_vkCreateImage(device, pCreateInfo, pAllocator, pImage);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CreateImage) {
+            return ddt->CreateImage(device, pCreateInfo, pAllocator, pImage);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkDestroyImage(
             VkDevice device,
             VkImage image,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroyImage(device, image, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->DestroyImage) {
+            ddt->DestroyImage(device, image, pAllocator);
+        }
     }
 
     void ovkGetImageMemoryRequirements(
             VkDevice device,
             VkImage image,
             VkMemoryRequirements* pMemoryRequirements) {
-        next_vkGetImageMemoryRequirements(device, image, pMemoryRequirements);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetImageMemoryRequirements) {
+            ddt->GetImageMemoryRequirements(device, image, pMemoryRequirements);
+        }
     }
+
     VkResult ovkBindImageMemory(
             VkDevice device,
             VkImage image,
             VkDeviceMemory memory,
             VkDeviceSize memoryOffset) {
-        return next_vkBindImageMemory(device, image, memory, memoryOffset);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->BindImageMemory) {
+            return ddt->BindImageMemory(device, image, memory, memoryOffset);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     VkResult ovkAllocateMemory(
@@ -458,13 +755,21 @@ namespace Layer {
             const VkMemoryAllocateInfo* pAllocateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDeviceMemory* pMemory) {
-        return next_vkAllocateMemory(device, pAllocateInfo, pAllocator, pMemory);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->AllocateMemory) {
+            return ddt->AllocateMemory(device, pAllocateInfo, pAllocator, pMemory);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkFreeMemory(
             VkDevice device,
             VkDeviceMemory memory,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkFreeMemory(device, memory, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->FreeMemory) {
+            ddt->FreeMemory(device, memory, pAllocator);
+        }
     }
 
     VkResult ovkCreateSemaphore(
@@ -472,26 +777,43 @@ namespace Layer {
             const VkSemaphoreCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkSemaphore* pSemaphore) {
-        return next_vkCreateSemaphore(device, pCreateInfo, pAllocator, pSemaphore);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CreateSemaphore) {
+            return ddt->CreateSemaphore(device, pCreateInfo, pAllocator, pSemaphore);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     void ovkDestroySemaphore(
             VkDevice device,
             VkSemaphore semaphore,
             const VkAllocationCallbacks* pAllocator) {
-        next_vkDestroySemaphore(device, semaphore, pAllocator);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->DestroySemaphore) {
+            ddt->DestroySemaphore(device, semaphore, pAllocator);
+        }
     }
 
     VkResult ovkGetMemoryFdKHR(
             VkDevice device,
             const VkMemoryGetFdInfoKHR* pGetFdInfo,
             int* pFd) {
-        return next_vkGetMemoryFdKHR(device, pGetFdInfo, pFd);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetMemoryFdKHR) {
+            return ddt->GetMemoryFdKHR(device, pGetFdInfo, pFd);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+
     VkResult ovkGetSemaphoreFdKHR(
             VkDevice device,
             const VkSemaphoreGetFdInfoKHR* pGetFdInfo,
             int* pFd) {
-        return next_vkGetSemaphoreFdKHR(device, pGetFdInfo, pFd);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetSemaphoreFdKHR) {
+            return ddt->GetSemaphoreFdKHR(device, pGetFdInfo, pFd);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
 #ifdef __ANDROID__
@@ -499,7 +821,11 @@ namespace Layer {
             VkDevice device,
             const AHardwareBuffer* hardwareBuffer,
             VkAndroidHardwareBufferPropertiesANDROID* pProperties) {
-        return next_vkGetAndroidHardwareBufferPropertiesANDROID(device, hardwareBuffer, pProperties);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetAndroidHardwareBufferPropertiesANDROID) {
+            return ddt->GetAndroidHardwareBufferPropertiesANDROID(device, hardwareBuffer, pProperties);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 #endif
 
@@ -508,14 +834,32 @@ namespace Layer {
             uint32_t queueFamilyIndex,
             uint32_t queueIndex,
             VkQueue* pQueue) {
-        next_vkGetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->GetDeviceQueue) {
+            ddt->GetDeviceQueue(device, queueFamilyIndex, queueIndex, pQueue);
+            if (pQueue && *pQueue) {
+                std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+                g_queue_to_device[*pQueue] = device;
+            }
+        }
     }
+
     VkResult ovkQueueSubmit(
             VkQueue queue,
             uint32_t submitCount,
             const VkSubmitInfo* pSubmits,
             VkFence fence) {
-        return next_vkQueueSubmit(queue, submitCount, pSubmits, fence);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_queue_to_device.find(queue);
+            if (it != g_queue_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->QueueSubmit) {
+            return ddt->QueueSubmit(queue, submitCount, pSubmits, fence);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
 
     void ovkCmdPipelineBarrier(
@@ -529,11 +873,21 @@ namespace Layer {
             const VkBufferMemoryBarrier* pBufferMemoryBarriers,
             uint32_t imageMemoryBarrierCount,
             const VkImageMemoryBarrier* pImageMemoryBarriers) {
-        next_vkCmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, dependencyFlags,
-            memoryBarrierCount, pMemoryBarriers,
-            bufferMemoryBarrierCount, pBufferMemoryBarriers,
-            imageMemoryBarrierCount, pImageMemoryBarriers);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_cmdbuf_to_device.find(commandBuffer);
+            if (it != g_cmdbuf_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CmdPipelineBarrier) {
+            ddt->CmdPipelineBarrier(commandBuffer, srcStageMask, dstStageMask, dependencyFlags,
+                memoryBarrierCount, pMemoryBarriers,
+                bufferMemoryBarrierCount, pBufferMemoryBarriers,
+                imageMemoryBarrierCount, pImageMemoryBarriers);
+        }
     }
+
     void ovkCmdBlitImage(
             VkCommandBuffer commandBuffer,
             VkImage srcImage,
@@ -543,7 +897,16 @@ namespace Layer {
             uint32_t regionCount,
             const VkImageBlit* pRegions,
             VkFilter filter) {
-        next_vkCmdBlitImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions, filter);
+        VkDevice device = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(g_dispatch_mutex);
+            auto it = g_cmdbuf_to_device.find(commandBuffer);
+            if (it != g_cmdbuf_to_device.end()) device = it->second;
+        }
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->CmdBlitImage) {
+            ddt->CmdBlitImage(commandBuffer, srcImage, srcImageLayout, dstImage, dstImageLayout, regionCount, pRegions, filter);
+        }
     }
 
     VkResult ovkAcquireNextImageKHR(
@@ -553,6 +916,19 @@ namespace Layer {
             VkSemaphore semaphore,
             VkFence fence,
             uint32_t* pImageIndex) {
-        return next_vkAcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
+        auto ddt = GetDeviceDispatchTable(device);
+        if (ddt && ddt->AcquireNextImageKHR) {
+            return ddt->AcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
+        }
+        return VK_ERROR_INITIALIZATION_FAILED;
     }
+}
+
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction
+layer_vkGetInstanceProcAddr(VkInstance instance, const char* pName) {
+    return vkGetInstanceProcAddr(instance, pName);
+}
+extern "C" __attribute__((visibility("default"))) PFN_vkVoidFunction
+layer_vkGetDeviceProcAddr(VkDevice device, const char* pName) {
+    return vkGetDeviceProcAddr(device, pName);
 }
