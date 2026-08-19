@@ -1,0 +1,225 @@
+--- a/thirdparty/volk/volk.c
++++ b/thirdparty/volk/volk.c
+@@ -55,12 +55,12 @@
+ 
+ static PFN_vkVoidFunction vkGetInstanceProcAddrStub(void* context, const char* name)
+ {
+-	return vkGetInstanceProcAddr((VkInstance)context, name);
++	return volk_vkGetInstanceProcAddr((VkInstance)context, name);
+ }
+ 
+ static PFN_vkVoidFunction vkGetDeviceProcAddrStub(void* context, const char* name)
+ {
+-	return vkGetDeviceProcAddr((VkDevice)context, name);
++	return volk_vkGetDeviceProcAddr((VkDevice)context, name);
+ }
+ 
+ static PFN_vkVoidFunction nullProcAddrStub(void* context, const char* name)
+@@ -78,7 +78,7 @@
+ 		return VK_ERROR_INITIALIZATION_FAILED;
+ 
+ 	// note: function pointer is cast through void function pointer to silence cast-function-type warning on gcc8
+-	vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void(*)(void))GetProcAddress(module, "vkGetInstanceProcAddr");
++	volk_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)(void(*)(void))GetProcAddress(module, "vkGetInstanceProcAddr");
+ #elif defined(__APPLE__)
+ 	void* module = dlopen("libvulkan.dylib", RTLD_NOW | RTLD_LOCAL);
+ 	if (!module)
+@@ -98,7 +98,7 @@
+ 	if (!module)
+ 		return VK_ERROR_INITIALIZATION_FAILED;
+ 
+-	vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(module, "vkGetInstanceProcAddr");
++	volk_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(module, "vkGetInstanceProcAddr");
+ #else
+ 	void* module = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
+ 	if (!module)
+@@ -106,7 +106,7 @@
+ 	if (!module)
+ 		return VK_ERROR_INITIALIZATION_FAILED;
+ 	VOLK_DISABLE_GCC_PEDANTIC_WARNINGS
+-	vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(module, "vkGetInstanceProcAddr");
++	volk_vkGetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)dlsym(module, "vkGetInstanceProcAddr");
+ 	VOLK_RESTORE_GCC_PEDANTIC_WARNINGS
+ #endif
+ 
+@@ -118,7 +118,7 @@
+ 
+ void volkInitializeCustom(PFN_vkGetInstanceProcAddr handler)
+ {
+-	vkGetInstanceProcAddr = handler;
++	volk_vkGetInstanceProcAddr = handler;
+ 
+ 	loadedModule = NULL;
+ 	volkGenLoadLoader(NULL, vkGetInstanceProcAddrStub);
+@@ -135,7 +135,7 @@
+ #endif
+ 	}
+ 
+-	vkGetInstanceProcAddr = NULL;
++	volk_vkGetInstanceProcAddr = NULL;
+ 	volkGenLoadLoader(NULL, nullProcAddrStub);
+ 	volkGenLoadInstance(NULL, nullProcAddrStub);
+ 	volkGenLoadDevice(NULL, nullProcAddrStub);
+@@ -153,7 +153,7 @@
+ 		return apiVersion;
+ #endif
+ 
+-	if (vkCreateInstance)
++	if (volk_vkCreateInstance)
+ 		return VK_API_VERSION_1_0;
+ 
+ 	return 0;
+@@ -198,9 +198,9 @@
+ {
+ 	/* VOLK_GENERATE_LOAD_LOADER */
+ #if defined(VK_VERSION_1_0)
+-	vkCreateInstance = (PFN_vkCreateInstance)load(context, "vkCreateInstance");
+-	vkEnumerateInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties)load(context, "vkEnumerateInstanceExtensionProperties");
+-	vkEnumerateInstanceLayerProperties = (PFN_vkEnumerateInstanceLayerProperties)load(context, "vkEnumerateInstanceLayerProperties");
++	volk_vkCreateInstance = (PFN_vkCreateInstance)load(context, "vkCreateInstance");
++	volk_vkEnumerateInstanceExtensionProperties = (PFN_vkEnumerateInstanceExtensionProperties)load(context, "vkEnumerateInstanceExtensionProperties");
++	volk_vkEnumerateInstanceLayerProperties = (PFN_vkEnumerateInstanceLayerProperties)load(context, "vkEnumerateInstanceLayerProperties");
+ #endif /* defined(VK_VERSION_1_0) */
+ #if defined(VK_VERSION_1_1)
+ 	vkEnumerateInstanceVersion = (PFN_vkEnumerateInstanceVersion)load(context, "vkEnumerateInstanceVersion");
+@@ -212,12 +212,12 @@
+ {
+ 	/* VOLK_GENERATE_LOAD_INSTANCE */
+ #if defined(VK_VERSION_1_0)
+-	vkCreateDevice = (PFN_vkCreateDevice)load(context, "vkCreateDevice");
++	volk_vkCreateDevice = (PFN_vkCreateDevice)load(context, "vkCreateDevice");
+ 	vkDestroyInstance = (PFN_vkDestroyInstance)load(context, "vkDestroyInstance");
+-	vkEnumerateDeviceExtensionProperties = (PFN_vkEnumerateDeviceExtensionProperties)load(context, "vkEnumerateDeviceExtensionProperties");
+-	vkEnumerateDeviceLayerProperties = (PFN_vkEnumerateDeviceLayerProperties)load(context, "vkEnumerateDeviceLayerProperties");
++	volk_vkEnumerateDeviceExtensionProperties = (PFN_vkEnumerateDeviceExtensionProperties)load(context, "vkEnumerateDeviceExtensionProperties");
++	volk_vkEnumerateDeviceLayerProperties = (PFN_vkEnumerateDeviceLayerProperties)load(context, "vkEnumerateDeviceLayerProperties");
+ 	vkEnumeratePhysicalDevices = (PFN_vkEnumeratePhysicalDevices)load(context, "vkEnumeratePhysicalDevices");
+-	vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)load(context, "vkGetDeviceProcAddr");
++	volk_vkGetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)load(context, "vkGetDeviceProcAddr");
+ 	vkGetPhysicalDeviceFeatures = (PFN_vkGetPhysicalDeviceFeatures)load(context, "vkGetPhysicalDeviceFeatures");
+ 	vkGetPhysicalDeviceFormatProperties = (PFN_vkGetPhysicalDeviceFormatProperties)load(context, "vkGetPhysicalDeviceFormatProperties");
+ 	vkGetPhysicalDeviceImageFormatProperties = (PFN_vkGetPhysicalDeviceImageFormatProperties)load(context, "vkGetPhysicalDeviceImageFormatProperties");
+@@ -2455,14 +2455,14 @@
+ PFN_vkCreateComputePipelines vkCreateComputePipelines;
+ PFN_vkCreateDescriptorPool vkCreateDescriptorPool;
+ PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout;
+-PFN_vkCreateDevice vkCreateDevice;
++PFN_vkCreateDevice volk_vkCreateDevice;
+ PFN_vkCreateEvent vkCreateEvent;
+ PFN_vkCreateFence vkCreateFence;
+ PFN_vkCreateFramebuffer vkCreateFramebuffer;
+ PFN_vkCreateGraphicsPipelines vkCreateGraphicsPipelines;
+ PFN_vkCreateImage vkCreateImage;
+ PFN_vkCreateImageView vkCreateImageView;
+-PFN_vkCreateInstance vkCreateInstance;
++PFN_vkCreateInstance volk_vkCreateInstance;
+ PFN_vkCreatePipelineCache vkCreatePipelineCache;
+ PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
+ PFN_vkCreateQueryPool vkCreateQueryPool;
+@@ -2492,10 +2492,10 @@
+ PFN_vkDestroyShaderModule vkDestroyShaderModule;
+ PFN_vkDeviceWaitIdle vkDeviceWaitIdle;
+ PFN_vkEndCommandBuffer vkEndCommandBuffer;
+-PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties;
+-PFN_vkEnumerateDeviceLayerProperties vkEnumerateDeviceLayerProperties;
+-PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
+-PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
++PFN_vkEnumerateDeviceExtensionProperties volk_vkEnumerateDeviceExtensionProperties;
++PFN_vkEnumerateDeviceLayerProperties volk_vkEnumerateDeviceLayerProperties;
++PFN_vkEnumerateInstanceExtensionProperties volk_vkEnumerateInstanceExtensionProperties;
++PFN_vkEnumerateInstanceLayerProperties volk_vkEnumerateInstanceLayerProperties;
+ PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
+ PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
+ PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
+@@ -2503,14 +2503,14 @@
+ PFN_vkFreeMemory vkFreeMemory;
+ PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
+ PFN_vkGetDeviceMemoryCommitment vkGetDeviceMemoryCommitment;
+-PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
++PFN_vkGetDeviceProcAddr volk_vkGetDeviceProcAddr;
+ PFN_vkGetDeviceQueue vkGetDeviceQueue;
+ PFN_vkGetEventStatus vkGetEventStatus;
+ PFN_vkGetFenceStatus vkGetFenceStatus;
+ PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements;
+ PFN_vkGetImageSparseMemoryRequirements vkGetImageSparseMemoryRequirements;
+ PFN_vkGetImageSubresourceLayout vkGetImageSubresourceLayout;
+-PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
++PFN_vkGetInstanceProcAddr volk_vkGetInstanceProcAddr;
+ PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures;
+ PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties;
+ PFN_vkGetPhysicalDeviceImageFormatProperties vkGetPhysicalDeviceImageFormatProperties;
+--- a/thirdparty/volk/volk.h
++++ b/thirdparty/volk/volk.h
+@@ -49,7 +49,7 @@
+  *
+  * This function can be used instead of volkInitialize.
+  * The handler function pointer will be asked to load global Vulkan symbols which require no instance
+- * (such as vkCreateInstance, vkEnumerateInstance* and vkEnumerateInstanceVersion if available).
++ * (such as volk_vkCreateInstance, vkEnumerateInstance* and vkEnumerateInstanceVersion if available).
+  */
+ void volkInitializeCustom(PFN_vkGetInstanceProcAddr handler);
+ 
+@@ -1576,14 +1576,14 @@
+ extern PFN_vkCreateComputePipelines vkCreateComputePipelines;
+ extern PFN_vkCreateDescriptorPool vkCreateDescriptorPool;
+ extern PFN_vkCreateDescriptorSetLayout vkCreateDescriptorSetLayout;
+-extern PFN_vkCreateDevice vkCreateDevice;
++extern PFN_vkCreateDevice volk_vkCreateDevice;
+ extern PFN_vkCreateEvent vkCreateEvent;
+ extern PFN_vkCreateFence vkCreateFence;
+ extern PFN_vkCreateFramebuffer vkCreateFramebuffer;
+ extern PFN_vkCreateGraphicsPipelines vkCreateGraphicsPipelines;
+ extern PFN_vkCreateImage vkCreateImage;
+ extern PFN_vkCreateImageView vkCreateImageView;
+-extern PFN_vkCreateInstance vkCreateInstance;
++extern PFN_vkCreateInstance volk_vkCreateInstance;
+ extern PFN_vkCreatePipelineCache vkCreatePipelineCache;
+ extern PFN_vkCreatePipelineLayout vkCreatePipelineLayout;
+ extern PFN_vkCreateQueryPool vkCreateQueryPool;
+@@ -1613,10 +1613,10 @@
+ extern PFN_vkDestroyShaderModule vkDestroyShaderModule;
+ extern PFN_vkDeviceWaitIdle vkDeviceWaitIdle;
+ extern PFN_vkEndCommandBuffer vkEndCommandBuffer;
+-extern PFN_vkEnumerateDeviceExtensionProperties vkEnumerateDeviceExtensionProperties;
+-extern PFN_vkEnumerateDeviceLayerProperties vkEnumerateDeviceLayerProperties;
+-extern PFN_vkEnumerateInstanceExtensionProperties vkEnumerateInstanceExtensionProperties;
+-extern PFN_vkEnumerateInstanceLayerProperties vkEnumerateInstanceLayerProperties;
++extern PFN_vkEnumerateDeviceExtensionProperties volk_vkEnumerateDeviceExtensionProperties;
++extern PFN_vkEnumerateDeviceLayerProperties volk_vkEnumerateDeviceLayerProperties;
++extern PFN_vkEnumerateInstanceExtensionProperties volk_vkEnumerateInstanceExtensionProperties;
++extern PFN_vkEnumerateInstanceLayerProperties volk_vkEnumerateInstanceLayerProperties;
+ extern PFN_vkEnumeratePhysicalDevices vkEnumeratePhysicalDevices;
+ extern PFN_vkFlushMappedMemoryRanges vkFlushMappedMemoryRanges;
+ extern PFN_vkFreeCommandBuffers vkFreeCommandBuffers;
+@@ -1624,14 +1624,14 @@
+ extern PFN_vkFreeMemory vkFreeMemory;
+ extern PFN_vkGetBufferMemoryRequirements vkGetBufferMemoryRequirements;
+ extern PFN_vkGetDeviceMemoryCommitment vkGetDeviceMemoryCommitment;
+-extern PFN_vkGetDeviceProcAddr vkGetDeviceProcAddr;
++extern PFN_vkGetDeviceProcAddr volk_vkGetDeviceProcAddr;
+ extern PFN_vkGetDeviceQueue vkGetDeviceQueue;
+ extern PFN_vkGetEventStatus vkGetEventStatus;
+ extern PFN_vkGetFenceStatus vkGetFenceStatus;
+ extern PFN_vkGetImageMemoryRequirements vkGetImageMemoryRequirements;
+ extern PFN_vkGetImageSparseMemoryRequirements vkGetImageSparseMemoryRequirements;
+ extern PFN_vkGetImageSubresourceLayout vkGetImageSubresourceLayout;
+-extern PFN_vkGetInstanceProcAddr vkGetInstanceProcAddr;
++extern PFN_vkGetInstanceProcAddr volk_vkGetInstanceProcAddr;
+ extern PFN_vkGetPhysicalDeviceFeatures vkGetPhysicalDeviceFeatures;
+ extern PFN_vkGetPhysicalDeviceFormatProperties vkGetPhysicalDeviceFormatProperties;
+ extern PFN_vkGetPhysicalDeviceImageFormatProperties vkGetPhysicalDeviceImageFormatProperties;
+@@ -1657,6 +1657,14 @@
+ extern PFN_vkUnmapMemory vkUnmapMemory;
+ extern PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets;
+ extern PFN_vkWaitForFences vkWaitForFences;
++#define vkCreateInstance volk_vkCreateInstance
++#define vkCreateDevice volk_vkCreateDevice
++#define vkGetInstanceProcAddr volk_vkGetInstanceProcAddr
++#define vkGetDeviceProcAddr volk_vkGetDeviceProcAddr
++#define vkEnumerateInstanceLayerProperties volk_vkEnumerateInstanceLayerProperties
++#define vkEnumerateInstanceExtensionProperties volk_vkEnumerateInstanceExtensionProperties
++#define vkEnumerateDeviceLayerProperties volk_vkEnumerateDeviceLayerProperties
++#define vkEnumerateDeviceExtensionProperties volk_vkEnumerateDeviceExtensionProperties
+ #endif /* defined(VK_VERSION_1_0) */
+ #if defined(VK_VERSION_1_1)
+ extern PFN_vkBindBufferMemory2 vkBindBufferMemory2;
