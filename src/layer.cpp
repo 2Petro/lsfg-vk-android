@@ -6,6 +6,7 @@
 #ifdef __ANDROID__
 #include <android/hardware_buffer.h>
 #include <android/log.h>
+#include <sys/system_properties.h>
 #endif
 
 #include <vulkan/vk_layer.h>
@@ -249,10 +250,19 @@ namespace {
             ddt.GetSemaphoreFdKHR = reinterpret_cast<PFN_vkGetSemaphoreFdKHR>(next_gpa(*pDevice, "vkGetSemaphoreFdKHR"));
 #ifdef __ANDROID__
             ddt.GetAndroidHardwareBufferPropertiesANDROID = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(next_gpa(*pDevice, "vkGetAndroidHardwareBufferPropertiesANDROID"));
-            if (!ddt.GetAndroidHardwareBufferPropertiesANDROID) {
-                std::cerr << "(no function pointer for vkGetAndroidHardwareBufferPropertiesANDROID)\n";
-            }
+	    if (!ddt.GetAndroidHardwareBufferPropertiesANDROID) {
+	        std::cerr << "[OkiLayer] (no function pointer for vkGetAndroidHardwareBufferPropertiesANDROID)\n";
+	    } else {
+            // Pointer is valid! Disable the layer property for any future instances.
+	        int res = __system_property_set("debug.vulkan.layers", "");
+        	if (res == 0) {
+	            std::cout << "AHB pointer acquired! Successfully unset android debug.vulkan.layers\n";
+        	} else {
+	            std::cerr << "Failed to clear 'debug.vulkan.layers' (error code: " << res << ")\n";
+        	}
+	    }
 #endif
+
             ddt.GetDeviceQueue = reinterpret_cast<PFN_vkGetDeviceQueue>(next_gpa(*pDevice, "vkGetDeviceQueue"));
             ddt.QueueSubmit = reinterpret_cast<PFN_vkQueueSubmit>(next_gpa(*pDevice, "vkQueueSubmit"));
             ddt.CmdPipelineBarrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(next_gpa(*pDevice, "vkCmdPipelineBarrier"));
