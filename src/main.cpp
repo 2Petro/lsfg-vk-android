@@ -18,7 +18,10 @@ namespace {
     __attribute__((constructor))
     __attribute__((visibility("default")))
     void lsfgvk_init() {
+	const char *log_path = "/data/local/tmp/lsfg/lsfg.log";
+	freopen(log_path, "a", stderr);
         std::cerr << std::unitbuf;
+
 
         // read configuration
         const std::string file = Utils::getConfigFile();
