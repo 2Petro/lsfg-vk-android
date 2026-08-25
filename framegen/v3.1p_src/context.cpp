@@ -225,6 +225,108 @@ void Context::present(Vulkan& vk,
 
 #ifdef __ANDROID__
 
+void Context::presentNative(Vulkan& vk,
+        VkSemaphore inSem, const std::vector<VkSemaphore>& outSems) {
+    auto& data = this->data.at(this->frameIdx % 8);
+
+    // 3. wait for completion of previous frame in this slot
+    if (data.shouldWait)
+        for (auto& fence : data.completionFences)
+            if (!fence.wait(vk.device, UINT64_MAX))
+                throw LSFG::vulkan_error(VK_TIMEOUT, "Fence wait timed out");
+    data.shouldWait = true;
+
+    // 1. create mipmaps and process input image
+    if (inSem != VK_NULL_HANDLE) data.inSemaphore = Core::Semaphore(vk.device, inSem);
+    for (size_t i = 0; i < vk.generationCount; i++)
+        data.internalSemaphores.at(i) = Core::Semaphore(vk.device);
+
+    data.cmdBuffer1 = Core::CommandBuffer(vk.device, vk.commandPool);
+    data.cmdBuffer1.begin();
+
+    {
+        std::vector<VkImageMemoryBarrier2> acquireBarriers;
+        acquireBarriers.reserve(2);
+        add_external_acquire(acquireBarriers, vk, this->inImg_0, VK_ACCESS_2_SHADER_READ_BIT);
+        add_external_acquire(acquireBarriers, vk, this->inImg_1, VK_ACCESS_2_SHADER_READ_BIT);
+        emit_external_barriers(data.cmdBuffer1, acquireBarriers);
+    }
+
+    this->mipmaps.Dispatch(data.cmdBuffer1, this->frameIdx);
+    for (size_t i = 0; i < 7; i++)
+        this->alpha.at(6 - i).Dispatch(data.cmdBuffer1, this->frameIdx);
+    this->beta.Dispatch(data.cmdBuffer1, this->frameIdx);
+
+    data.cmdBuffer1.end();
+    std::vector<Core::Semaphore> waits;
+    if (inSem != VK_NULL_HANDLE) waits.push_back(data.inSemaphore);
+    data.cmdBuffer1.submit(vk.device.getComputeQueue(), std::nullopt,
+        waits, std::nullopt,
+        data.internalSemaphores, std::nullopt);
+
+    // 2. generate intermediary frames
+    for (size_t pass = 0; pass < vk.generationCount; pass++) {
+        auto& internalSemaphore = data.internalSemaphores.at(pass);
+        auto& outSemaphore = data.outSemaphores.at(pass);
+        if (pass < outSems.size())
+            outSemaphore = Core::Semaphore(vk.device, outSems.at(pass));
+        auto& completionFence = data.completionFences.at(pass);
+        completionFence = Core::Fence(vk.device);
+
+        auto& buf2 = data.cmdBuffers2.at(pass);
+        buf2 = Core::CommandBuffer(vk.device, vk.commandPool);
+        buf2.begin();
+
+        {
+            std::vector<VkImageMemoryBarrier2> acquireBarriers;
+            acquireBarriers.reserve(1);
+            add_external_acquire(acquireBarriers, vk, this->generate.getOutImages().at(pass),
+                VK_ACCESS_2_SHADER_WRITE_BIT);
+            emit_external_barriers(buf2, acquireBarriers);
+        }
+
+        for (size_t i = 0; i < 7; i++) {
+            this->gamma.at(i).Dispatch(buf2, this->frameIdx, pass);
+            if (i >= 4)
+                this->delta.at(i - 4).Dispatch(buf2, this->frameIdx, pass);
+        }
+        this->generate.Dispatch(buf2, this->frameIdx, pass);
+
+        {
+            std::vector<VkImageMemoryBarrier2> releaseBarriers;
+            releaseBarriers.reserve(pass + 1 == vk.generationCount ? 3 : 1);
+            add_external_release(releaseBarriers, vk, this->generate.getOutImages().at(pass),
+                VK_ACCESS_2_SHADER_WRITE_BIT);
+            if (pass + 1 == vk.generationCount) {
+                add_external_release(releaseBarriers, vk, this->inImg_0, VK_ACCESS_2_SHADER_READ_BIT);
+                add_external_release(releaseBarriers, vk, this->inImg_1, VK_ACCESS_2_SHADER_READ_BIT);
+            }
+            emit_external_barriers(buf2, releaseBarriers);
+        }
+
+        buf2.end();
+        std::vector<Core::Semaphore> signals;
+        if (pass < outSems.size()) signals.push_back(outSemaphore);
+        buf2.submit(vk.device.getComputeQueue(), completionFence,
+            { internalSemaphore }, std::nullopt,
+            signals, std::nullopt);
+    }
+
+    this->frameIdx++;
+}
+
+void Context::waitForCompletion(Vulkan& vk) {
+    auto& data = this->data.at((this->frameIdx + 7) % 8);
+    if (!data.shouldWait) return;
+    for (auto& fence : data.completionFences)
+        if (!fence.wait(vk.device, UINT64_MAX))
+            throw LSFG::vulkan_error(VK_TIMEOUT, "Fence wait timed out");
+}
+
+#endif // __ANDROID__
+
+#ifdef __ANDROID__
+
 #include <android/hardware_buffer.h>
 
 Context::Context(Vulkan& vk,

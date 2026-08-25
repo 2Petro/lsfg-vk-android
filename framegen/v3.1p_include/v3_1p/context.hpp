@@ -62,6 +62,31 @@ namespace LSFG_3_1P {
         void present(Vulkan& vk,
             int inSem, const std::vector<int>& outSem);
 
+#ifdef __ANDROID__
+        ///
+        /// Present on the context using native (same-device) semaphore handles.
+        /// Used by the Android host-device mode where layer and framegen share
+        /// one VkDevice, so plain handles can synchronize without fd export.
+        ///
+        /// @param inSem Binary semaphore signaled when the input image copy is
+        ///              done, or VK_NULL_HANDLE to run unsynchronized.
+        /// @param outSems Optional binary semaphores signaled when each
+        ///              generated frame is done (empty = unsynchronized).
+        ///
+        /// @throws LSFG::vulkan_error if the context fails to present.
+        ///
+        void presentNative(Vulkan& vk,
+            VkSemaphore inSem, const std::vector<VkSemaphore>& outSems);
+
+        ///
+        /// Wait for completion fences of the most recently submitted slot
+        /// (scoped, does not idle the whole device).
+        ///
+        /// @throws LSFG::vulkan_error on fence wait timeout.
+        ///
+        void waitForCompletion(Vulkan& vk);
+#endif
+
         // Trivially copyable, moveable and destructible
         Context(const Context&) = default;
         Context& operator=(const Context&) = default;

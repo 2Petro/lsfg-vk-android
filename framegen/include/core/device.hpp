@@ -28,6 +28,19 @@ namespace LSFG::Core {
         ///
         Device(const Instance& instance, uint64_t deviceUUID);
 
+        ///
+        /// Wrap an existing host-owned device instead of creating one.
+        /// The wrapped handles are not owned and never destroyed.
+        ///
+        /// @param instance Host instance, used to resolve entry points.
+        /// @param physicalDevice Host physical device.
+        /// @param device Host logical device (must be usable for compute).
+        ///
+        /// @throws LSFG::vulkan_error if queue discovery fails.
+        ///
+        static Device fromHost(VkInstance instance,
+            VkPhysicalDevice physicalDevice, VkDevice device);
+
         /// Get the Vulkan handle.
         [[nodiscard]] auto handle() const { return *this->device; }
         /// Get the physical device associated with this logical device.
@@ -48,6 +61,8 @@ namespace LSFG::Core {
         Device& operator=(Device&&) noexcept = default;
         ~Device() = default;
     private:
+        Device() noexcept = default;
+
         std::shared_ptr<VkDevice> device;
         VkPhysicalDevice physicalDevice{};
 

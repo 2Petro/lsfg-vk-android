@@ -29,6 +29,7 @@ namespace {
         PFN_vkGetPhysicalDeviceQueueFamilyProperties GetPhysicalDeviceQueueFamilyProperties{nullptr};
         PFN_vkGetPhysicalDeviceMemoryProperties GetPhysicalDeviceMemoryProperties{nullptr};
         PFN_vkGetPhysicalDeviceProperties GetPhysicalDeviceProperties{nullptr};
+        PFN_vkGetPhysicalDeviceFeatures2 GetPhysicalDeviceFeatures2{nullptr};
         PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR GetPhysicalDeviceSurfaceCapabilitiesKHR{nullptr};
         PFN_vkEnumeratePhysicalDevices EnumeratePhysicalDevices{nullptr};
     };
@@ -142,6 +143,7 @@ namespace {
             idt.GetPhysicalDeviceQueueFamilyProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceQueueFamilyProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceQueueFamilyProperties"));
             idt.GetPhysicalDeviceMemoryProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceMemoryProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceMemoryProperties"));
             idt.GetPhysicalDeviceProperties = reinterpret_cast<PFN_vkGetPhysicalDeviceProperties>(next_gpa(*pInstance, "vkGetPhysicalDeviceProperties"));
+            idt.GetPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(next_gpa(*pInstance, "vkGetPhysicalDeviceFeatures2"));
             idt.GetPhysicalDeviceSurfaceCapabilitiesKHR = reinterpret_cast<PFN_vkGetPhysicalDeviceSurfaceCapabilitiesKHR>(next_gpa(*pInstance, "vkGetPhysicalDeviceSurfaceCapabilitiesKHR"));
             idt.EnumeratePhysicalDevices = reinterpret_cast<PFN_vkEnumeratePhysicalDevices>(next_gpa(*pInstance, "vkEnumeratePhysicalDevices"));
 
@@ -564,6 +566,21 @@ namespace Layer {
         if (idt && idt->GetPhysicalDeviceProperties) {
             idt->GetPhysicalDeviceProperties(physicalDevice, pProperties);
         }
+    }
+
+    void ovkGetPhysicalDeviceFeatures2(
+            VkPhysicalDevice physicalDevice,
+            VkPhysicalDeviceFeatures2* pFeatures) {
+        VkInstance instance = GetInstanceFromPhysicalDevice(physicalDevice);
+        auto idt = GetInstanceDispatchTable(instance);
+        if (idt && idt->GetPhysicalDeviceFeatures2) {
+            idt->GetPhysicalDeviceFeatures2(physicalDevice, pFeatures);
+        }
+    }
+
+    VkInstance ovkGetPhysicalDeviceInstance(
+            VkPhysicalDevice physicalDevice) {
+        return GetInstanceFromPhysicalDevice(physicalDevice);
     }
 
     VkResult ovkGetPhysicalDeviceSurfaceCapabilitiesKHR(

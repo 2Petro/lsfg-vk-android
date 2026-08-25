@@ -18,6 +18,7 @@
 
 #include <filesystem>
 #include <exception>
+#include <functional>
 #include <iostream>
 #include <cstdint>
 #include <cstdlib>
@@ -89,24 +90,47 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
     // initialize lsfg
-    auto* lsfgInitialize = LSFG_3_1::initialize;
-    auto* lsfgDeleteContext = LSFG_3_1::deleteContext;
-    if (conf.performance) {
-        lsfgInitialize = LSFG_3_1P::initialize;
-        lsfgDeleteContext = LSFG_3_1P::deleteContext;
-    }
-
-    setenv("DISABLE_LSFG", "1", 1); // NOLINT
-
-    lsfgInitialize(
-        Utils::getDeviceUUID(info.physicalDevice),
-        conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+    const std::function<std::vector<uint8_t>(const std::string&)> shaderLoader =
         [](const std::string& name) {
             auto dxbc = Extract::getShader(name);
             auto spirv = Extract::translateShader(dxbc);
             return spirv;
-        }
-    );
+        };
+
+#ifdef __ANDROID__
+    // Host-device mode: run framegen on the layer's hooked device instead of
+    // an internal instance (which cannot discover the host's ICD, e.g. Turnip
+    // injected by a wrapper). Enabled by default for testing; set
+    // LSFG_HOST_DEVICE=0 to force the legacy internal-device path.
+    const char* hostDeviceEnv = std::getenv("LSFG_HOST_DEVICE");
+    this->hostSync = !(hostDeviceEnv && std::string(hostDeviceEnv) == "0");
+    if (this->hostSync && !conf.performance) {
+        std::cerr << "lsfg-vk: Host-device mode requires performance mode, using internal device.\n";
+        this->hostSync = false;
+    }
+#endif
+
+    setenv("DISABLE_LSFG", "1", 1); // NOLINT
+
+#ifdef __ANDROID__
+    if (this->hostSync) {
+        LSFG_3_1P::initializeFromHost(
+            info.instance, info.physicalDevice, info.device,
+            conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+            shaderLoader);
+        std::cerr << "lsfg-vk: Host-device mode enabled (framegen shares the hooked device).\n";
+    } else
+#endif
+    {
+        auto* lsfgInitialize = LSFG_3_1::initialize;
+        if (conf.performance)
+            lsfgInitialize = LSFG_3_1P::initialize;
+        lsfgInitialize(
+            Utils::getDeviceUUID(info.physicalDevice),
+            conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+            shaderLoader
+        );
+    }
 
     // Create framegen context using AHB sharing
     std::vector<AHardwareBuffer*> outAhbs;
@@ -126,8 +150,9 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
     this->lsfgCtxId = std::shared_ptr<int32_t>(
         new int32_t(ctxId),
-        [lsfgDeleteContext = lsfgDeleteContext](const int32_t* id) {
-            lsfgDeleteContext(*id);
+        [perf = conf.performance](const int32_t* id) {
+            if (perf) LSFG_3_1P::deleteContext(*id);
+            else LSFG_3_1::deleteContext(*id);
         }
     );
 
@@ -233,26 +258,35 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         gameRenderSemaphores2,
         { pass.preCopySemaphores.at(1).handle() });
 
-    // Wait for the pre-copy to finish before telling framegen to start.
-    // This is a device-wide idle wait — heavier than semaphore-based sync
-    // but necessary because OPAQUE_FD is not available on Android.
-    Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
+    if (this->hostSync) {
+        // Same-device mode: hand the pre-copy semaphore directly to framegen
+        // and wait on its scoped completion fences. No fd export, no
+        // device-wide idle.
+        LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
+            pass.preCopySemaphores.at(1).handle(), {});
+        LSFG_3_1P::waitFrame(*this->lsfgCtxId);
+    } else {
+        // Wait for the pre-copy to finish before telling framegen to start.
+        // This is a device-wide idle wait — heavier than semaphore-based sync
+        // but necessary because OPAQUE_FD is not available on Android.
+        Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
 
-    // 2. Tell framegen to generate intermediary frames
-    //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
-    std::vector<int> noOutSems;  // empty
-    if (conf.performance)
-        LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
-    else
-        LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+        // 2. Tell framegen to generate intermediary frames
+        //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
+        std::vector<int> noOutSems;  // empty
+        if (conf.performance)
+            LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
+        else
+            LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
 
-    // 3. Wait for framegen's GPU work to finish before reading output images.
-    //    framegen uses its own VkDevice internally, so we need waitIdle()
-    //    to ensure cross-device synchronization.
-    if (conf.performance)
-        LSFG_3_1P::waitIdle();
-    else
-        LSFG_3_1::waitIdle();
+        // 3. Wait for framegen's GPU work to finish before reading output images.
+        //    framegen uses its own VkDevice internally, so we need waitIdle()
+        //    to ensure cross-device synchronization.
+        if (conf.performance)
+            LSFG_3_1P::waitIdle();
+        else
+            LSFG_3_1::waitIdle();
+    }
 
     // 4. Copy generated frames to swapchain images and present them
     for (size_t i = 0; i < static_cast<size_t>(conf.multiplier - 1); i++) {

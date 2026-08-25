@@ -63,6 +63,25 @@ namespace {
             const VkDeviceCreateInfo* pCreateInfo,
             const VkAllocationCallbacks* pAllocator,
             VkDevice* pDevice) {
+#ifdef __ANDROID__
+        auto extensions = Utils::addExtensions(
+            pCreateInfo->ppEnabledExtensionNames,
+            pCreateInfo->enabledExtensionCount,
+            {
+		"VK_KHR_swapchain",
+                "VK_KHR_external_memory",
+                "VK_KHR_external_memory_fd",
+                "VK_KHR_external_semaphore",
+                "VK_KHR_external_semaphore_fd",
+                "VK_ANDROID_external_memory_android_hardware_buffer",
+                "VK_KHR_sampler_ycbcr_conversion",
+                "VK_KHR_dedicated_allocation",
+                "VK_KHR_get_memory_requirements2",
+                "VK_KHR_bind_memory2",
+                "VK_KHR_maintenance1"
+            }
+        );
+#else
         // add extensions
         auto extensions = Utils::addExtensions(
             pCreateInfo->ppEnabledExtensionNames,
@@ -75,9 +94,75 @@ namespace {
                 "VK_KHR_external_semaphore_fd"
             }
         );
+#endif
         VkDeviceCreateInfo createInfo = *pCreateInfo;
         createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
         createInfo.ppEnabledExtensionNames = extensions.data();
+
+#ifdef __ANDROID__
+        // Probe and enable the features framegen needs so it can share this
+        // device (host-device mode): synchronization2, timeline semaphores,
+        // vulkanMemoryModel, shaderFloat16.
+        VkPhysicalDeviceShaderFloat16Int8Features fp16Probe{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_FLOAT16_INT8_FEATURES,
+        };
+        VkPhysicalDeviceVulkan13Features f13Probe{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            .pNext = &fp16Probe,
+        };
+        VkPhysicalDeviceVulkan12Features f12Probe{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .pNext = &f13Probe,
+        };
+        VkPhysicalDeviceFeatures2 featsProbe{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+            .pNext = &f12Probe,
+        };
+        Layer::ovkGetPhysicalDeviceFeatures2(physicalDevice, &featsProbe);
+
+        VkPhysicalDeviceVulkan13Features feat13{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
+            .synchronization2 = f13Probe.synchronization2
+        };
+        VkPhysicalDeviceVulkan12Features feat12{
+            .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+            .pNext = &feat13,
+            .shaderFloat16 = fp16Probe.shaderFloat16,
+            .timelineSemaphore = f12Probe.timelineSemaphore,
+            .vulkanMemoryModel = f12Probe.vulkanMemoryModel
+        };
+
+        // Merge into an existing application feature chain or append at its
+        // tail so the application's own requests stay intact.
+        bool hasF12 = false;
+        bool hasF13 = false;
+        void* tail = nullptr;
+        for (void* p = const_cast<void*>(createInfo.pNext); p != nullptr;) {
+            auto* node = static_cast<VkBaseOutStructure*>(p);
+            if (node->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES) {
+                auto* f = reinterpret_cast<VkPhysicalDeviceVulkan12Features*>(p);
+                if (fp16Probe.shaderFloat16) f->shaderFloat16 = VK_TRUE;
+                if (f12Probe.timelineSemaphore) f->timelineSemaphore = VK_TRUE;
+                if (f12Probe.vulkanMemoryModel) f->vulkanMemoryModel = VK_TRUE;
+                hasF12 = true;
+            } else if (node->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES) {
+                auto* f = reinterpret_cast<VkPhysicalDeviceVulkan13Features*>(p);
+                if (f13Probe.synchronization2) f->synchronization2 = VK_TRUE;
+                hasF13 = true;
+            }
+            if (node->pNext == nullptr) { tail = node; break; }
+            p = node->pNext;
+        }
+        if (!hasF12 || !hasF13) {
+            void* link = !hasF12 ? static_cast<void*>(&feat12) : static_cast<void*>(&feat13);
+            if (tail)
+                static_cast<VkBaseOutStructure*>(tail)->pNext =
+                    static_cast<VkBaseOutStructure*>(link);
+            else
+                createInfo.pNext = link;
+        }
+#endif
+
         auto res = Layer::ovkCreateDevice(physicalDevice, &createInfo, pAllocator, pDevice);
         if (res == VK_ERROR_EXTENSION_NOT_PRESENT)
             throw std::runtime_error(
@@ -97,6 +182,7 @@ namespace {
         deviceToInfo.emplace(*pDevice, DeviceInfo {
             .device = *pDevice,
             .physicalDevice = physicalDevice,
+            .instance = Layer::ovkGetPhysicalDeviceInstance(physicalDevice),
             .queue = Utils::findQueue(*pDevice, physicalDevice, pCreateInfo, VK_QUEUE_GRAPHICS_BIT)
         });
         return VK_SUCCESS;

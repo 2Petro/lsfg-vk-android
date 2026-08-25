@@ -13,6 +13,7 @@ namespace Hooks {
     struct DeviceInfo {
         VkDevice device;
         VkPhysicalDevice physicalDevice;
+        VkInstance instance{VK_NULL_HANDLE};
         std::pair<uint32_t, VkQueue> queue; // graphics family
     };
 

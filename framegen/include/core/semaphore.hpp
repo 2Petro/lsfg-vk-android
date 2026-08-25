@@ -40,6 +40,14 @@ namespace LSFG::Core {
         Semaphore(const Core::Device& device, int fd);
 
         ///
+        /// Wrap an existing (host-owned) semaphore without taking ownership.
+        ///
+        /// @param device Vulkan device the handle belongs to.
+        /// @param handle Existing binary semaphore handle.
+        ///
+        Semaphore(const Core::Device& device, VkSemaphore handle);
+
+        ///
         /// Signal the semaphore to a specific value.
         ///
         /// @param device Vulkan device

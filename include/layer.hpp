@@ -58,6 +58,13 @@ namespace Layer {
     void ovkGetPhysicalDeviceProperties(
         VkPhysicalDevice physicalDevice,
         VkPhysicalDeviceProperties* pProperties);
+    /// Call to the original vkGetPhysicalDeviceFeatures2 function.
+    void ovkGetPhysicalDeviceFeatures2(
+        VkPhysicalDevice physicalDevice,
+        VkPhysicalDeviceFeatures2* pFeatures);
+    /// Get the instance a physical device belongs to.
+    VkInstance ovkGetPhysicalDeviceInstance(
+        VkPhysicalDevice physicalDevice);
     /// Call to the original vkGetPhysicalDeviceSurfaceCapabilitiesKHR function.
     VkResult ovkGetPhysicalDeviceSurfaceCapabilitiesKHR(
         VkPhysicalDevice physicalDevice,

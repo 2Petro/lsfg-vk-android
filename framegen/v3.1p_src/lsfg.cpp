@@ -52,6 +52,56 @@ void LSFG_3_1P::initialize(uint64_t deviceUUID,
     std::srand(static_cast<uint32_t>(std::time(nullptr)));
 }
 
+#ifdef __ANDROID__
+void LSFG_3_1P::initializeFromHost(
+        VkInstance hostInstance,
+        VkPhysicalDevice physicalDevice, VkDevice deviceHandle,
+        bool isHdr, float flowScale, uint64_t generationCount,
+        const std::function<std::vector<uint8_t>(const std::string&)>& loader) {
+    if (instance.has_value() || device.has_value())
+        return;
+
+    contexts = std::unordered_map<int32_t, Context>();
+    device.emplace(Vulkan {
+        .device{Core::Device::fromHost(hostInstance, physicalDevice, deviceHandle)},
+        .generationCount = generationCount,
+        .flowScale = flowScale,
+        .isHdr = isHdr
+    });
+
+    device->commandPool = Core::CommandPool(device->device);
+    device->descriptorPool = Core::DescriptorPool(device->device);
+
+    device->resources = Pool::ResourcePool(device->isHdr, device->flowScale);
+    device->shaders = Pool::ShaderPool(loader);
+
+    std::srand(static_cast<uint32_t>(std::time(nullptr)));
+}
+
+void LSFG_3_1P::presentContextNative(int32_t id,
+        VkSemaphore inSem, const std::vector<VkSemaphore>& outSems) {
+    if (!device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.presentNative(*device, inSem, outSems);
+}
+
+void LSFG_3_1P::waitFrame(int32_t id) {
+    if (!device.has_value())
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
+
+    auto it = contexts.find(id);
+    if (it == contexts.end())
+        throw LSFG::vulkan_error(VK_ERROR_UNKNOWN, "Context not found");
+
+    it->second.waitForCompletion(*device);
+}
+#endif
+
 int32_t LSFG_3_1P::createContext(
         int in0, int in1, const std::vector<int>& outN,
         VkExtent2D extent, VkFormat format) {
@@ -75,7 +125,7 @@ void LSFG_3_1P::presentContext(int32_t id, int inSem, const std::vector<int>& ou
 }
 
 void LSFG_3_1P::deleteContext(int32_t id) {
-    if (!instance.has_value() || !device.has_value())
+    if (!device.has_value())
         throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
 
     auto it = contexts.find(id);
@@ -87,7 +137,7 @@ void LSFG_3_1P::deleteContext(int32_t id) {
 }
 
 void LSFG_3_1P::finalize() {
-    if (!instance.has_value() || !device.has_value())
+    if (!device.has_value())
         return;
 
     vkDeviceWaitIdle(device->device.handle());
@@ -104,7 +154,7 @@ int32_t LSFG_3_1P::createContextFromAHB(
         AHardwareBuffer* in0, AHardwareBuffer* in1,
         const std::vector<AHardwareBuffer*>& outN,
         VkExtent2D extent, VkFormat format) {
-    if (!instance.has_value() || !device.has_value())
+    if (!device.has_value())
         throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "LSFG not initialized");
 
     const int32_t id = std::rand();

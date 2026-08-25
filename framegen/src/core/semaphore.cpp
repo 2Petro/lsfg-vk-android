@@ -77,6 +77,15 @@ Semaphore::Semaphore(const Core::Device& device, int fd) {
     );
 }
 
+Semaphore::Semaphore(const Core::Device& device, VkSemaphore handle)
+    : isTimeline(false),
+      semaphore(std::shared_ptr<VkSemaphore>(
+          new VkSemaphore(handle),
+          [](VkSemaphore*) {} // not owned, host destroys it
+      )) {
+    (void)device;
+}
+
 void Semaphore::signal(const Core::Device& device, uint64_t value) const {
     if (!this->isTimeline)
         throw std::logic_error("Invalid timeline semaphore");

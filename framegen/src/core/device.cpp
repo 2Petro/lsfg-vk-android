@@ -6,12 +6,16 @@
 #include "core/instance.hpp"
 #include "common/exception.hpp"
 
+#include <algorithm>
 #include <cstdint>
+#include <cctype>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <optional>
 #include <string>
 #include <vector>
+#include <iostream>
 
 using namespace LSFG::Core;
 
@@ -40,6 +44,17 @@ bool hasExtension(const std::vector<VkExtensionProperties>& extensions, const ch
     return false;
 }
 
+bool containsIgnoreCase(const std::string& haystack, const std::string& needle) {
+    if (needle.empty()) return false;
+    const auto it = std::search(haystack.begin(), haystack.end(),
+        needle.begin(), needle.end(),
+        [](char a, char b) {
+            return std::tolower(static_cast<unsigned char>(a)) ==
+                   std::tolower(static_cast<unsigned char>(b));
+        });
+    return it != haystack.end();
+}
+
 } // namespace
 
 const Image& Device::getFallbackDescriptorImage() const {
@@ -60,6 +75,31 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
 
     // get device by uuid
     std::optional<VkPhysicalDevice> physicalDevice;
+    setenv("LSFG_DRIVER","Turnip Adreno (TM) 740",1);
+
+    // Android: Turnip and the Qualcomm blob report the same vendor/device id,
+    // so the uuid collides and enumeration order decides the winner. An
+    // LSFG_DRIVER=<substring> env hint pins framegen to the driver whose
+    // deviceName contains it (e.g. LSFG_DRIVER=Turnip).
+    const char* driverHint = std::getenv("LSFG_DRIVER");
+    if (driverHint && *driverHint != '\0') {
+        for (const auto& device : devices) {
+            VkPhysicalDeviceProperties properties;
+            vkGetPhysicalDeviceProperties(device, &properties);
+
+            if (containsIgnoreCase(properties.deviceName, driverHint)) {
+                physicalDevice = device;
+                std::cerr << "lsfg-vk: LSFG_DRIVER='" << driverHint
+                          << "' matched: " << properties.deviceName << "\n";
+                break;
+            }
+        }
+        if (!physicalDevice)
+            std::cerr << "lsfg-vk: LSFG_DRIVER='" << driverHint
+                      << "' matched no device, falling back to uuid\n";
+    }
+
+    if (!physicalDevice)
     for (const auto& device : devices) {
         VkPhysicalDeviceProperties properties;
         vkGetPhysicalDeviceProperties(device, &properties);
@@ -68,6 +108,8 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
             static_cast<uint64_t>(properties.vendorID) << 32 | properties.deviceID;
         if (deviceUUID == uuid || deviceUUID == 0x1463ABAC) {
             physicalDevice = device;
+	    std::cerr << "lsfg-vk: Pipeline selected driver: "
+                      << properties.deviceName << "\n";
             break;
         }
     }
@@ -196,4 +238,58 @@ Device::Device(const Instance& instance, uint64_t deviceUUID) {
             VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
             VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
     }
+}
+
+Device Device::fromHost(VkInstance hostInstance,
+        VkPhysicalDevice physicalDevice, VkDevice device) {
+    volkInitialize();
+    volkLoadInstance(hostInstance);
+    volkLoadDevice(device);
+
+    Device self;
+    self.physicalDevice = physicalDevice;
+    self.device = std::shared_ptr<VkDevice>(
+        new VkDevice(device),
+        [](VkDevice*) {} // not owned, host destroys it
+    );
+
+    uint32_t familyCount{};
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, nullptr);
+
+    std::vector<VkQueueFamilyProperties> queueFamilies(familyCount);
+    vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &familyCount, queueFamilies.data());
+
+    std::optional<uint32_t> computeFamilyIdx;
+    for (uint32_t i = 0; i < familyCount; ++i) {
+        if (queueFamilies[i].queueFlags & VK_QUEUE_COMPUTE_BIT)
+            computeFamilyIdx = i;
+    }
+    if (!computeFamilyIdx)
+        throw LSFG::vulkan_error(VK_ERROR_INITIALIZATION_FAILED, "No compute queue family found");
+
+    VkQueue queueHandle{};
+    vkGetDeviceQueue(device, *computeFamilyIdx, 0, &queueHandle);
+
+    self.computeFamilyIdx = *computeFamilyIdx;
+    self.computeQueue = queueHandle;
+
+    VkPhysicalDeviceRobustness2FeaturesEXT robustness2{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ROBUSTNESS_2_FEATURES_EXT,
+    };
+    VkPhysicalDeviceFeatures2 feats{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
+        .pNext = &robustness2
+    };
+    vkGetPhysicalDeviceFeatures2(physicalDevice, &feats);
+    self.nullDescriptorSupported = robustness2.nullDescriptor == VK_TRUE;
+
+    std::cerr << "lsfg-vk: Host device mode active (nullDescriptor="
+              << (self.nullDescriptorSupported ? "yes" : "no") << ")\n";
+
+    if (!self.nullDescriptorSupported) {
+        self.fallbackDescriptorImage = std::make_shared<Core::Image>(self,
+            VkExtent2D{1, 1}, VK_FORMAT_R8G8B8A8_UNORM,
+            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
+    }
+    return self;
 }
