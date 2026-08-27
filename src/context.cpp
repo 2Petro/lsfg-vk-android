@@ -10,6 +10,7 @@
 #ifdef __ANDROID__
 #include <android/hardware_buffer.h>
 #include <android/log.h>
+#include "hwme.hpp"
 #endif
 
 #include <vulkan/vulkan_core.h>
@@ -258,34 +259,64 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         gameRenderSemaphores2,
         { pass.preCopySemaphores.at(1).handle() });
 
-    if (this->hostSync) {
-        // Same-device mode: hand the pre-copy semaphore directly to framegen
-        // and wait on its scoped completion fences. No fd export, no
-        // device-wide idle.
-        LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
-            pass.preCopySemaphores.at(1).handle(), {});
-        LSFG_3_1P::waitFrame(*this->lsfgCtxId);
-    } else {
-        // Wait for the pre-copy to finish before telling framegen to start.
-        // This is a device-wide idle wait — heavier than semaphore-based sync
-        // but necessary because OPAQUE_FD is not available on Android.
-        Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
+    bool hwUsed = false;
+    if (this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
+        if (LSFG::HwMe::available()) {
+            // Ensure the copy has landed before GL reads the AHBs.
+            // This is a CPU wait — heavier than semaphore chaining but
+            // safe for the shared AHB storage without FD plumbing.
+            Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
+            AHardwareBuffer* prev = (this->frameIdx % 2 == 0) ? this->frame_1.getAhb() : this->frame_0.getAhb();
+            AHardwareBuffer* cur  = (this->frameIdx % 2 == 0) ? this->frame_0.getAhb() : this->frame_1.getAhb();
+            std::vector<AHardwareBuffer*> outs;
+            outs.reserve(this->out_n.size());
+            for (auto &o : this->out_n) outs.push_back(o.getAhb());
+            if (LSFG::HwMe::generate(prev, cur, outs, this->extent.width, this->extent.height)) {
+                std::cerr << "lsfg-vk: HWME generated " << outs.size() << " frame(s)\n";
+                hwUsed = true;
+            } else {
+                std::cerr << "lsfg-vk: HWME failed, falling back to SW\n";
+            }
+        } else {
+            static bool logged = false;
+            if (!logged) {
+                std::cerr << "lsfg-vk: HWME requested but not available (no QCOM block), using SW\n";
+                logged = true;
+            }
+        }
+    }
 
-        // 2. Tell framegen to generate intermediary frames
-        //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
-        std::vector<int> noOutSems;  // empty
-        if (conf.performance)
-            LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
-        else
-            LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+    if (!hwUsed) {
+        if (this->hostSync) {
+            // Same-device mode: hand the pre-copy semaphore directly to framegen
+            // and wait on its scoped completion fences. No fd export, no
+            // device-wide idle.
+            LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
+                pass.preCopySemaphores.at(1).handle(), {});
+            LSFG_3_1P::waitFrame(*this->lsfgCtxId);
+        } else {
+            // Wait for the pre-copy to finish before telling framegen to start.
+            // This is a device-wide idle wait — heavier than semaphore-based sync
+            // but necessary because OPAQUE_FD is not available on Android.
+            // If we already waited for HW attempt, this is a second wait but harmless.
+            Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
 
-        // 3. Wait for framegen's GPU work to finish before reading output images.
-        //    framegen uses its own VkDevice internally, so we need waitIdle()
-        //    to ensure cross-device synchronization.
-        if (conf.performance)
-            LSFG_3_1P::waitIdle();
-        else
-            LSFG_3_1::waitIdle();
+            // 2. Tell framegen to generate intermediary frames
+            //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
+            std::vector<int> noOutSems;  // empty
+            if (conf.performance)
+                LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
+            else
+                LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+
+            // 3. Wait for framegen's GPU work to finish before reading output images.
+            //    framegen uses its own VkDevice internally, so we need waitIdle()
+            //    to ensure cross-device synchronization.
+            if (conf.performance)
+                LSFG_3_1P::waitIdle();
+            else
+                LSFG_3_1::waitIdle();
+        }
     }
 
     // 4. Copy generated frames to swapchain images and present them

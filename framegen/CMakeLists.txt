@@ -39,6 +39,13 @@ target_include_directories(lsfg-vk-framegen
 target_link_libraries(lsfg-vk-framegen
     PUBLIC volk)
 
+if(ANDROID)
+    find_library(EGL_LIB EGL)
+    find_library(GLESv3_LIB GLESv3)
+    target_link_libraries(lsfg-vk-framegen PRIVATE ${EGL_LIB} ${GLESv3_LIB} android log)
+    target_compile_definitions(lsfg-vk-framegen PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
+endif()
+
 # diagnostics
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     set_target_properties(lsfg-vk-framegen PROPERTIES
