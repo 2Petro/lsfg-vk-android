@@ -74,6 +74,10 @@ void Config::updateConfig(const std::string& file) {
     const toml::value globalTable = toml::find_or_default<toml::table>(toml, "global");
     const Configuration global{
         .dll =   toml::find_or(globalTable, "dll", std::string()),
+        .hwme = toml::find_or(globalTable, "hwme", true),
+        .hwmeMaxMv = static_cast<float>(toml::find_or(globalTable, "hwme_maxmv", 128.0)),
+        .hwmeDebug = toml::find_or(globalTable, "hwme_debug", 0),
+        .timingDebug = toml::find_or(globalTable, "timing_debug", false),
         .config_file = file,
         .timestamp = std::filesystem::last_write_time(file)
     };
@@ -102,6 +106,10 @@ void Config::updateConfig(const std::string& file) {
             .performance = toml::find_or(gameTable, "performance_mode", false),
             .hdr = toml::find_or(gameTable, "hdr_mode", false),
             .e_present =   into_present(toml::find_or(gameTable, "experimental_present_mode", "")),
+            .hwme = toml::find_or(gameTable, "hwme", global.hwme),
+            .hwmeMaxMv = static_cast<float>(toml::find_or(gameTable, "hwme_maxmv", static_cast<double>(global.hwmeMaxMv))),
+            .hwmeDebug = toml::find_or(gameTable, "hwme_debug", global.hwmeDebug),
+            .timingDebug = toml::find_or(gameTable, "timing_debug", global.timingDebug),
             .config_file = file,
             .timestamp = global.timestamp
         };

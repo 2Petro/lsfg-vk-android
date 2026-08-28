@@ -231,6 +231,12 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
 #ifdef __ANDROID__
     // Android path: synchronous frame generation using waitIdle()
     // instead of OPAQUE_FD semaphore export which Turnip doesn't support.
+    auto tPresentStart = std::chrono::steady_clock::now();
+    auto tGenStart = tPresentStart;
+    auto tGenEnd = tPresentStart;
+    bool timingEnabled = conf.timingDebug;
+    LSFG::HwMe::setEnabled(conf.hwme);
+    LSFG::HwMe::configure(conf.hwmeMaxMv, conf.hwmeDebug);
 
     // 1. copy swapchain image to frame_0/frame_1
     //    Use a simple semaphore (no fd export) to synchronize the copy
@@ -260,6 +266,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         { pass.preCopySemaphores.at(1).handle() });
 
     bool hwUsed = false;
+    if (timingEnabled) tGenStart = std::chrono::steady_clock::now();
     if (this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
         if (LSFG::HwMe::available()) {
             // Ensure the copy has landed before GL reads the AHBs.
@@ -317,6 +324,9 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             else
                 LSFG_3_1::waitIdle();
         }
+        if (timingEnabled) tGenEnd = std::chrono::steady_clock::now();
+    } else {
+        if (timingEnabled) tGenEnd = std::chrono::steady_clock::now();
     }
 
     // 4. Copy generated frames to swapchain images and present them
@@ -377,6 +387,25 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     auto res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw LSFG::vulkan_error(res, "Failed to present swapchain image");
+
+    if (timingEnabled) {
+        auto tPresentEnd = std::chrono::steady_clock::now();
+        int genLatencyMs = (int)std::chrono::duration<double, std::milli>(tGenEnd - tGenStart).count();
+        int totalMs = (int)std::chrono::duration<double, std::milli>(tPresentEnd - tPresentStart).count();
+        int frametimeMs = 0, fps = 0;
+        if (this->hasLastPresent) {
+            auto dtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(tPresentStart - this->lastPresentTime).count();
+            if (dtNs > 0) {
+                frametimeMs = (int)(dtNs / 1000000);
+                fps = (int)(1e9 / dtNs * conf.multiplier);
+            }
+        }
+        this->lastPresentTime = tPresentStart;
+        this->hasLastPresent = true;
+        char type = (conf.multiplier > 1 ? 'G' : 'R');
+        char mode = hwUsed ? 'H' : 'S';
+        std::cerr << "lsfg-timing FPS (" << fps << ") FT (" << frametimeMs << ") T (" << type << ") M (" << mode << ") L (" << genLatencyMs << ") total (" << totalMs << ") [" << this->extent.width << "x" << this->extent.height << " x" << conf.multiplier << "]\n";
+    }
 
     this->frameIdx++;
     return res;

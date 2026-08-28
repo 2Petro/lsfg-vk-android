@@ -10,6 +10,8 @@ struct AHardwareBuffer;
 namespace LSFG::HwMe {
 
     bool isEnabled();
+    void setEnabled(bool enabled);
+    void configure(float maxMv, int debugLevel);
 
     bool available();
 

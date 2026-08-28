@@ -28,6 +28,15 @@ namespace Config {
         /// Experimental flag for overriding the synchronization method.
         VkPresentModeKHR e_present;
 
+        /// HWME (Adreno GL_QCOM_motion_estimation) enable, default true
+        bool hwme{true};
+        /// HWME max motion clamp, default 128
+        float hwmeMaxMv{128.0F};
+        /// HWME debug level 0-5, default 0
+        int hwmeDebug{0};
+        /// Timing debug single-line log, default false
+        bool timingDebug{false};
+
         /// Path to the configuration file.
         std::filesystem::path config_file;
         /// File timestamp of the configuration file

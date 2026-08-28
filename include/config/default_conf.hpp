@@ -6,6 +6,10 @@ const std::string DEFAULT_CONFIG = R"(version = 1
 [global]
 # override the location of Lossless Scaling
 # dll = "/games/Lossless Scaling/Lossless.dll"
+# hwme = true
+# hwme_maxmv = 128.0
+# hwme_debug = 0
+# timing_debug = false
 
 # [[game]] # example entry
 # exe = "Game.exe"

@@ -14,6 +14,7 @@
 #include "mini/semaphore.hpp"
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <vector>
@@ -69,6 +70,9 @@ private:
     Mini::CommandPool cmdPool;
     uint64_t frameIdx{0};
     bool hostSync{false};
+
+    std::chrono::steady_clock::time_point lastPresentTime{};
+    bool hasLastPresent{false};
 
     struct RenderPassInfo {
         Mini::CommandBuffer preCopyBuf; // copy from swapchain image to frame_0/frame_1

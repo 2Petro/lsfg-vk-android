@@ -36,6 +36,9 @@ namespace {
 
     PFN_TexEstimateMotionQCOM texEstimateMotion = nullptr;
     EGLDisplay g_dpy = EGL_NO_DISPLAY;
+    std::atomic<bool> g_enabled{true};
+    std::atomic<float> g_maxMv{128.0f};
+    std::atomic<int> g_debug{0};
 
     struct GlResources {
         bool valid{false};
@@ -167,28 +170,6 @@ void main() {
     float mag = length(m);
     if (mag > uMaxMotion)
         m *= uMaxMotion / mag;
-
-    if (uDebug > 2.5) {
-        o = vec4(vec3(texture(uColA, vUv).r), 1.0);
-        return;
-    }
-    if (uDebug > 1.5) {
-        o = vec4(vec3(texture(uLumaDbg, uvw).r), 1.0);
-        return;
-    }
-    if (uDebug > 4.5) {
-        float d = abs(texture(uLumaDbg, uvw).r - texture(uLumaDbgB, uvw).r);
-        o = vec4(vec3(min(d * 8.0, 1.0)), 1.0);
-        return;
-    }
-    if (uDebug > 3.5) {
-        o = vec4(vec3(min(mag / 4.0, 1.0)), 1.0);
-        return;
-    }
-    if (uDebug > 0.5) {
-        o = vec4(vec3(min(mag / 32.0, 1.0)), 1.0);
-        return;
-    }
 
     vec2 pa = vUv - (uAlpha * m + (uHasPrevMv > 0.5 ? uAlpha * 0.5 * mpix : vec2(0.0))) / uFullSize;
     vec2 pb = vUv + ((1.0 - uAlpha) * m - (uHasPrevMv > 0.5 ? (1.0 - uAlpha) * 0.5 * mpix : vec2(0.0))) / uFullSize;
@@ -502,10 +483,10 @@ void main() {
             glUniform1f(glGetUniformLocation(res.progBlend, "uHasPrevMv"),
                 hasPrev ? 1.0f : 0.0f);
             glUniform1f(glGetUniformLocation(res.progBlend, "uAlpha"), alpha);
+            res.debugLevel = static_cast<float>(g_debug.load());
             glUniform1f(glGetUniformLocation(res.progBlend, "uDebug"), res.debugLevel);
             {
-                const char* maxMv = std::getenv("LSFG_HWME_MAXMV");
-                float v = maxMv ? static_cast<float>(atof(maxMv)) : 128.0f;
+                float v = g_maxMv.load();
                 glUniform1f(glGetUniformLocation(res.progBlend, "uMaxMotion"), v);
 
                 float sx = 1.0f, sy = 1.0f;
@@ -593,8 +574,7 @@ void main() {
         if (bx > 0) res.blockX = static_cast<uint32_t>(bx);
         if (by > 0) res.blockY = static_cast<uint32_t>(by);
 
-        const char* dbg = std::getenv("LSFG_HWME_DEBUG");
-        res.debugLevel = (dbg && *dbg) ? static_cast<float>(atof(dbg)) : 0.0f;
+        res.debugLevel = static_cast<float>(g_debug.load());
 
         res.progLuma = linkProgram(VS_SRC, LUMA_FS_SRC);
         res.progBlend = linkProgram(VS_SRC, BLEND_FS_SRC);
@@ -651,10 +631,15 @@ void main() {
 namespace LSFG::HwMe {
 
     bool isEnabled() {
-        const char* e = std::getenv("LSFG_HWME");
-        if (e && e[0] == '0' && e[1] == '\0') return false;
-        if (e && (e[0] == 'n' || e[0] == 'N')) return false; // no/false
-        return true;
+        return g_enabled.load();
+    }
+    void setEnabled(bool enabled) {
+        g_enabled.store(enabled);
+    }
+    void configure(float maxMv, int debugLevel) {
+        g_maxMv.store(maxMv);
+        g_debug.store(debugLevel);
+        res.debugLevel = static_cast<float>(debugLevel);
     }
 
     bool available() {
