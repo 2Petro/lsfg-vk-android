@@ -6,6 +6,7 @@
 #include "utils/utils.hpp"
 #include "hooks.hpp"
 #include "layer.hpp"
+#include <cmath>
 
 #ifdef __ANDROID__
 #include <android/hardware_buffer.h>
@@ -61,13 +62,14 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         // print config
         std::cerr << "lsfg-vk: Reloaded configuration for " << name.second << ":\n";
         if (!conf.dll.empty()) std::cerr << "  Using DLL from: " << conf.dll << '\n';
-        std::cerr << "  Multiplier: " << conf.multiplier << '\n';
+        if (conf.targetFpsEnabled) std::cerr << "  Target FPS: " << conf.targetFps << " (enabled)\n";
+        else std::cerr << "  Multiplier: " << conf.multiplier << '\n';
         std::cerr << "  Flow Scale: " << conf.flowScale << '\n';
         std::cerr << "  Performance Mode: " << (conf.performance ? "Enabled" : "Disabled") << '\n';
         std::cerr << "  HDR Mode: " << (conf.hdr ? "Enabled" : "Disabled") << '\n';
         if (conf.e_present != 2) std::cerr << "  ! Present Mode: " << conf.e_present << '\n';
 
-        if (conf.multiplier <= 1) return;
+        if (!conf.targetFpsEnabled && conf.multiplier <= 1) return;
     }
     // we could take the format from the swapchain,
     // but honestly this is safer.
@@ -85,7 +87,23 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     this->frame_1 = Mini::Image(info.device, info.physicalDevice,
         extent, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
-    for (size_t i = 0; i < static_cast<size_t>(conf.multiplier - 1); ++i)
+    size_t genCount = 0;
+    if (conf.targetFpsEnabled) {
+        if (conf.targetBaseFps > 0) {
+            int need = (conf.targetFps + conf.targetBaseFps -1)/ conf.targetBaseFps; // exact for fixed base, no worst-case overhead -> L5 not L13
+            if (need<1) need=1; if (need>8) need=8;
+            genCount = (need>0? (size_t)(need-1):0);
+            if (genCount==0) genCount=1;
+        } else {
+            int maxNeed = (conf.targetFps + 9) / 10;
+            if (maxNeed < 2) maxNeed = 2;
+            if (maxNeed > 8) maxNeed = 8;
+            genCount = static_cast<size_t>(maxNeed - 1);
+            if (genCount==0) genCount=1;
+        }
+    } else genCount = static_cast<size_t>(conf.multiplier - 1);
+    this->maxGenCount = genCount;
+    for (size_t i = 0; i < genCount; ++i)
         this->out_n.emplace_back(info.device, info.physicalDevice,
             extent, format,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
@@ -112,12 +130,16 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 #endif
 
     setenv("DISABLE_LSFG", "1", 1); // NOLINT
+    size_t initGen = this->maxGenCount;
+#ifndef __ANDROID__
+    if (!conf.targetFpsEnabled) initGen = static_cast<size_t>(conf.multiplier - 1);
+#endif
 
 #ifdef __ANDROID__
     if (this->hostSync) {
         LSFG_3_1P::initializeFromHost(
             info.instance, info.physicalDevice, info.device,
-            conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+            conf.hdr, 1.0F / conf.flowScale, initGen,
             shaderLoader);
         std::cerr << "lsfg-vk: Host-device mode enabled (framegen shares the hooked device).\n";
     } else
@@ -128,15 +150,15 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             lsfgInitialize = LSFG_3_1P::initialize;
         lsfgInitialize(
             Utils::getDeviceUUID(info.physicalDevice),
-            conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+            conf.hdr, 1.0F / conf.flowScale, initGen,
             shaderLoader
         );
     }
 
     // Create framegen context using AHB sharing
     std::vector<AHardwareBuffer*> outAhbs;
-    outAhbs.reserve(conf.multiplier - 1);
-    for (size_t i = 0; i < static_cast<size_t>(conf.multiplier - 1); ++i)
+    outAhbs.reserve(this->maxGenCount);
+    for (size_t i = 0; i < this->maxGenCount; ++i)
         outAhbs.push_back(this->out_n.at(i).getAhb());
 
     int32_t ctxId;
@@ -163,7 +185,21 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
 #else
     // Desktop Linux path: use OPAQUE_FD-based image sharing
-
+    {
+        size_t genCount = 0;
+        if (conf.targetFpsEnabled) {
+            if (conf.targetBaseFps>0) {
+                int need=(conf.targetFps+conf.targetBaseFps-1)/conf.targetBaseFps; if(need<1)need=1; if(need>8)need=8; genCount=(need>0?(size_t)(need-1):0); if(genCount==0)genCount=1;
+            } else {
+                int maxNeeded = (conf.targetFps + 9) / 10;
+                if (maxNeeded < 2) maxNeeded = 2;
+                if (maxNeeded > 8) maxNeeded = 8;
+                genCount = static_cast<size_t>(maxNeeded - 1);
+                if (genCount==0) genCount=1;
+            }
+        } else genCount = static_cast<size_t>(conf.multiplier - 1);
+        this->maxGenCount = genCount;
+    }
     std::array<int, 2> fds{};
     this->frame_0 = Mini::Image(info.device, info.physicalDevice,
         extent, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -172,8 +208,8 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         extent, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
         &fds.at(1));
 
-    std::vector<int> outFds(conf.multiplier - 1);
-    for (size_t i = 0; i < (conf.multiplier - 1); ++i)
+    std::vector<int> outFds(this->maxGenCount);
+    for (size_t i = 0; i < this->maxGenCount; ++i)
         this->out_n.emplace_back(info.device, info.physicalDevice,
             extent, format,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
@@ -193,7 +229,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
     lsfgInitialize(
         Utils::getDeviceUUID(info.physicalDevice),
-        conf.hdr, 1.0F / conf.flowScale, conf.multiplier - 1,
+        conf.hdr, 1.0F / conf.flowScale, this->maxGenCount,
         [](const std::string& name) {
             auto dxbc = Extract::getShader(name);
             auto spirv = Extract::translateShader(dxbc);
@@ -213,14 +249,19 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
     // prepare render passes
     this->cmdPool = Mini::CommandPool(info.device, info.queue.first);
+    size_t poolGen = this->maxGenCount;
+    if (poolGen==0) poolGen = conf.targetFpsEnabled ? 1 : static_cast<size_t>(conf.multiplier - 1);
+    size_t allocGen = std::max<size_t>(poolGen, 7);
     for (size_t i = 0; i < 8; i++) {
         auto& pass = this->passInfos.at(i);
-        pass.renderSemaphores.resize(conf.multiplier - 1);
-        pass.acquireSemaphores.resize(conf.multiplier - 1);
-        pass.postCopyBufs.resize(conf.multiplier - 1);
-        pass.postCopySemaphores.resize(conf.multiplier - 1);
-        pass.prevPostCopySemaphores.resize(conf.multiplier - 1);
+        pass.renderSemaphores.resize(allocGen);
+        pass.acquireSemaphores.resize(allocGen);
+        pass.postCopyBufs.resize(allocGen);
+        pass.postCopySemaphores.resize(allocGen);
+        pass.prevPostCopySemaphores.resize(allocGen);
     }
+    this->smoothedRealFps = 60.0f;
+    if (conf.targetFpsEnabled) this->smoothedRealFps = 30.0f;
 }
 
 VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, VkQueue queue,
@@ -237,6 +278,49 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     bool timingEnabled = conf.timingDebug;
     LSFG::HwMe::setEnabled(conf.hwme);
     LSFG::HwMe::configure(conf.hwmeMaxMv, conf.hwmeDebug);
+
+    // target fps pacing: compute neededTotal so R+G=T~=target even when R drops (shader compile)
+    // e.g. target 60: R30->G30(2x), R25->G35(2.4x=>round 2=>~60), R20->G40(3x), R18->G42(3x=>54 avg, will dither 3/4 to hit 60)
+    size_t neededTotal = conf.multiplier;
+    size_t neededGen = 0;
+    if (conf.targetFpsEnabled) {
+        float base = 0;
+        if (conf.targetBaseFps > 0) {
+            base = (float)conf.targetBaseFps; // manual override for test: avoids FIFO throttle artifact (15 vs 30)
+            this->smoothedRealFps = base;
+        } else {
+            if (this->hasLastPresent) {
+                auto dtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(tPresentStart - this->lastPresentTime).count();
+                if (dtNs>0) {
+                    float inst = 1e9f/(float)dtNs;
+                    if (inst<5) inst=5; if (inst>480) inst=480;
+                    if (this->frameIdx<3) this->smoothedRealFps=inst;
+                    else this->smoothedRealFps = this->smoothedRealFps*0.6f + inst*0.4f;
+                }
+            } else if (this->frameIdx==0) this->smoothedRealFps = (float)conf.targetFps/2.0f;
+            base = this->smoothedRealFps;
+        }
+        float ratio = (float)conf.targetFps / base;
+        int need = (int)std::round(ratio);
+        if (need<1) need=1; if (need<2 && ratio>1.35f) need=2;
+        if (need>(int)(this->maxGenCount+1)) need=(int)(this->maxGenCount+1);
+        if (need>8) need=8;
+        if (conf.targetBaseFps==0) {
+            static thread_local int pendNeed=0, pendCnt=0;
+            if (need!=this->lastNeeded && this->frameIdx>3) {
+                if (pendNeed!=need){pendNeed=need; pendCnt=1;}
+                else pendCnt++;
+                if (pendCnt<2) need=this->lastNeeded; else pendCnt=0;
+            } else {pendNeed=need; pendCnt=0;}
+        }
+        neededTotal=(size_t)need;
+        neededGen = neededTotal>0?neededTotal-1:0;
+        this->lastNeeded=(int)neededTotal;
+    } else {
+        neededTotal=conf.multiplier;
+        neededGen=neededTotal>0?neededTotal-1:0;
+        if (neededGen>this->maxGenCount) neededGen=this->maxGenCount;
+    }
 
     // 1. copy swapchain image to frame_0/frame_1
     //    Use a simple semaphore (no fd export) to synchronize the copy
@@ -267,17 +351,14 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
 
     bool hwUsed = false;
     if (timingEnabled) tGenStart = std::chrono::steady_clock::now();
-    if (this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
+    if (neededGen>0 && this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
         if (LSFG::HwMe::available()) {
-            // Ensure the copy has landed before GL reads the AHBs.
-            // This is a CPU wait — heavier than semaphore chaining but
-            // safe for the shared AHB storage without FD plumbing.
             Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
             AHardwareBuffer* prev = (this->frameIdx % 2 == 0) ? this->frame_1.getAhb() : this->frame_0.getAhb();
             AHardwareBuffer* cur  = (this->frameIdx % 2 == 0) ? this->frame_0.getAhb() : this->frame_1.getAhb();
             std::vector<AHardwareBuffer*> outs;
-            outs.reserve(this->out_n.size());
-            for (auto &o : this->out_n) outs.push_back(o.getAhb());
+            outs.reserve(neededGen);
+            for (size_t oi=0; oi<neededGen && oi<this->out_n.size(); ++oi) outs.push_back(this->out_n.at(oi).getAhb());
             if (LSFG::HwMe::generate(prev, cur, outs, this->extent.width, this->extent.height)) {
                 std::cerr << "lsfg-vk: HWME generated " << outs.size() << " frame(s)\n";
                 hwUsed = true;
@@ -294,43 +375,31 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     }
 
     if (!hwUsed) {
-        if (this->hostSync) {
-            // Same-device mode: hand the pre-copy semaphore directly to framegen
-            // and wait on its scoped completion fences. No fd export, no
-            // device-wide idle.
-            LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
-                pass.preCopySemaphores.at(1).handle(), {});
-            LSFG_3_1P::waitFrame(*this->lsfgCtxId);
-        } else {
-            // Wait for the pre-copy to finish before telling framegen to start.
-            // This is a device-wide idle wait — heavier than semaphore-based sync
-            // but necessary because OPAQUE_FD is not available on Android.
-            // If we already waited for HW attempt, this is a second wait but harmless.
-            Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
-
-            // 2. Tell framegen to generate intermediary frames
-            //    presentContext(id, -1, {}) — no semaphore FDs, synchronous
-            std::vector<int> noOutSems;  // empty
-            if (conf.performance)
-                LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
-            else
-                LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
-
-            // 3. Wait for framegen's GPU work to finish before reading output images.
-            //    framegen uses its own VkDevice internally, so we need waitIdle()
-            //    to ensure cross-device synchronization.
-            if (conf.performance)
-                LSFG_3_1P::waitIdle();
-            else
-                LSFG_3_1::waitIdle();
+        if (neededGen>0) {
+            if (this->hostSync) {
+                LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
+                    pass.preCopySemaphores.at(1).handle(), {});
+                LSFG_3_1P::waitFrame(*this->lsfgCtxId);
+            } else {
+                Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
+                std::vector<int> noOutSems;
+                if (conf.performance)
+                    LSFG_3_1P::presentContext(*this->lsfgCtxId, -1, noOutSems);
+                else
+                    LSFG_3_1::presentContext(*this->lsfgCtxId, -1, noOutSems);
+                if (conf.performance)
+                    LSFG_3_1P::waitIdle();
+                else
+                    LSFG_3_1::waitIdle();
+            }
         }
         if (timingEnabled) tGenEnd = std::chrono::steady_clock::now();
     } else {
         if (timingEnabled) tGenEnd = std::chrono::steady_clock::now();
     }
 
-    // 4. Copy generated frames to swapchain images and present them
-    for (size_t i = 0; i < static_cast<size_t>(conf.multiplier - 1); i++) {
+    // 4. Copy generated frames to swapchain images and present them (variable needGen for target mode keeps sync)
+    for (size_t i = 0; i < neededGen; i++) {
         // acquire next swapchain image
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
@@ -373,18 +442,32 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     }
 
     // 5. present actual next frame (the real capture, not a generated one)
-    //    Wait for the last post-copy to finish
-    pass.prevPostCopySemaphores.at(conf.multiplier - 1 - 1) = Mini::Semaphore(info.device);
-    VkSemaphore lastPostCopySem = pass.postCopySemaphores.at(conf.multiplier - 1 - 1).handle();
-    const VkPresentInfoKHR finalPresentInfo{
-        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &lastPostCopySem,
-        .swapchainCount = 1,
-        .pSwapchains = &this->swapchain,
-        .pImageIndices = &presentIdx,
-    };
-    auto res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
+    VkResult res = VK_SUCCESS;
+    if (neededGen>0) {
+        pass.prevPostCopySemaphores.at(neededGen - 1) = Mini::Semaphore(info.device);
+        VkSemaphore lastPostCopySem = pass.postCopySemaphores.at(neededGen - 1).handle();
+        const VkPresentInfoKHR finalPresentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &lastPostCopySem,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain,
+            .pImageIndices = &presentIdx,
+        };
+        res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
+    } else {
+        VkSemaphore preCopySem = pass.preCopySemaphores.at(1).handle();
+        const VkPresentInfoKHR finalPresentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .pNext = pNext,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &preCopySem,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain,
+            .pImageIndices = &presentIdx,
+        };
+        res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
+    }
     if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw LSFG::vulkan_error(res, "Failed to present swapchain image");
 
@@ -393,25 +476,52 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         int genLatencyMs = (int)std::chrono::duration<double, std::milli>(tGenEnd - tGenStart).count();
         int totalMs = (int)std::chrono::duration<double, std::milli>(tPresentEnd - tPresentStart).count();
         int frametimeMs = 0, fps = 0;
+        int realFps = 0, genFps = 0, totalFps = 0;
         if (this->hasLastPresent) {
             auto dtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(tPresentStart - this->lastPresentTime).count();
             if (dtNs > 0) {
                 frametimeMs = (int)(dtNs / 1000000);
-                fps = (int)(1e9 / dtNs * conf.multiplier);
+                realFps = (int)(1e9 / dtNs);
+                genFps = realFps * (int)neededGen;
+                totalFps = realFps * (int)neededTotal;
+                fps = totalFps;
             }
         }
         this->lastPresentTime = tPresentStart;
         this->hasLastPresent = true;
-        char type = (conf.multiplier > 1 ? 'G' : 'R');
+        char type = (neededTotal > 1 ? 'G' : 'R');
         char mode = hwUsed ? 'H' : 'S';
-        std::cerr << "lsfg-timing FPS (" << fps << ") FT (" << frametimeMs << ") T (" << type << ") M (" << mode << ") L (" << genLatencyMs << ") total (" << totalMs << ") [" << this->extent.width << "x" << this->extent.height << " x" << conf.multiplier << "]\n";
+        // R=real, G=gen, T=total -> target mode shows T~=target even when R drops (shader compile) => G substitutes
+        if (conf.targetFpsEnabled)
+            std::cerr << "lsfg-timing FPS (R " << realFps << " G " << genFps << " T " << totalFps << ") FT (" << frametimeMs << ") T (" << type << ") M (" << mode << ") L (" << genLatencyMs << ") total (" << totalMs << ") [" << this->extent.width << "x" << this->extent.height << " x" << neededTotal << " target " << conf.targetFps << "]\n";
+        else
+            std::cerr << "lsfg-timing FPS (R " << realFps << " G " << genFps << " T " << totalFps << ") FT (" << frametimeMs << ") T (" << type << ") M (" << mode << ") L (" << genLatencyMs << ") total (" << totalMs << ") [" << this->extent.width << "x" << this->extent.height << " x" << neededTotal << "]\n";
+    }
+    if (conf.targetFpsEnabled && !timingEnabled) {
+        this->lastPresentTime = tPresentStart;
+        this->hasLastPresent = true;
     }
 
     this->frameIdx++;
     return res;
 
 #else
-    // Desktop Linux path: OPAQUE_FD semaphore-based synchronization
+    // Desktop Linux path: OPAQUE_FD semaphore-based synchronization (also supports target mode)
+    auto tPresentStart = std::chrono::steady_clock::now();
+    size_t neededTotal = conf.multiplier;
+    size_t neededGen = 0;
+    if (conf.targetFpsEnabled) {
+        float base = 0;
+        if (conf.targetBaseFps > 0) { base=(float)conf.targetBaseFps; this->smoothedRealFps=base; }
+        else {
+            if (this->hasLastPresent) {
+                auto dtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(tPresentStart - this->lastPresentTime).count();
+                if (dtNs>0){ float inst=1e9f/(float)dtNs; if(inst<5)inst=5; if(inst>480)inst=480; if(this->frameIdx<3) this->smoothedRealFps=inst; else this->smoothedRealFps=this->smoothedRealFps*0.6f+inst*0.4f; }
+            } else if(this->frameIdx==0) this->smoothedRealFps=(float)conf.targetFps/2.0f;
+            base=this->smoothedRealFps;
+        }
+        float ratio=(float)conf.targetFps/base; int need=(int)std::round(ratio); if(need<1)need=1; if(need<2&&ratio>1.35f)need=2; if(need>(int)(this->maxGenCount+1))need=(int)(this->maxGenCount+1); if(need>8)need=8; neededTotal=(size_t)need; neededGen=need>0?need-1:0; this->lastNeeded=need;
+    } else { neededTotal=conf.multiplier; neededGen=neededTotal>0?neededTotal-1:0; if(neededGen>this->maxGenCount) neededGen=this->maxGenCount; }
 
     // 1. copy swapchain image to frame_0/frame_1
     int preCopySemaphoreFd{};
@@ -439,10 +549,12 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
           pass.preCopySemaphores.at(1).handle() });
 
     // 2. render intermediary frames
-    std::vector<int> renderSemaphoreFds(conf.multiplier - 1);
-    for (size_t i = 0; i < (conf.multiplier - 1); ++i)
+    bool skipGen = (neededGen==0);
+    std::vector<int> renderSemaphoreFds(neededGen);
+    for (size_t i = 0; i < neededGen; ++i)
         pass.renderSemaphores.at(i) = Mini::Semaphore(info.device, &renderSemaphoreFds.at(i));
 
+    if (!skipGen) {
     if (conf.performance)
         LSFG_3_1P::presentContext(*this->lsfgCtxId,
             preCopySemaphoreFd,
@@ -451,8 +563,9 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         LSFG_3_1::presentContext(*this->lsfgCtxId,
             preCopySemaphoreFd,
             renderSemaphoreFds);
+    }
 
-    for (size_t i = 0; i < (conf.multiplier - 1); i++) {
+    for (size_t i = 0; i < neededGen; i++) {
         // 3. acquire next swapchain image
         pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
         uint32_t imageIdx{};
@@ -500,21 +613,34 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     }
 
     // 6. present actual next frame
-    VkSemaphore lastPrevPostCopySemaphore =
-        pass.prevPostCopySemaphores.at(conf.multiplier - 1 - 1).handle();
-    const VkPresentInfoKHR presentInfo{
-        .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-        .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &lastPrevPostCopySemaphore,
-        .swapchainCount = 1,
-        .pSwapchains = &this->swapchain,
-        .pImageIndices = &presentIdx,
-    };
-    auto res = Layer::ovkQueuePresentKHR(queue, &presentInfo);
-    if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
-        throw LSFG::vulkan_error(res, "Failed to present swapchain image");
-
+    VkResult resDesktop = VK_SUCCESS;
+    if (neededGen>0) {
+        VkSemaphore lastPrevPostCopySemaphore = pass.prevPostCopySemaphores.at(neededGen - 1).handle();
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &lastPrevPostCopySemaphore,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain,
+            .pImageIndices = &presentIdx,
+        };
+        resDesktop = Layer::ovkQueuePresentKHR(queue, &presentInfo);
+    } else {
+        VkSemaphore preCopySem = pass.preCopySemaphores.at(1).handle();
+        const VkPresentInfoKHR presentInfo{
+            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &preCopySem,
+            .swapchainCount = 1,
+            .pSwapchains = &this->swapchain,
+            .pImageIndices = &presentIdx,
+        };
+        resDesktop = Layer::ovkQueuePresentKHR(queue, &presentInfo);
+    }
+    if (resDesktop != VK_SUCCESS && resDesktop != VK_SUBOPTIMAL_KHR)
+        throw LSFG::vulkan_error(resDesktop, "Failed to present swapchain image");
+    this->lastPresentTime = tPresentStart; this->hasLastPresent = true;
     this->frameIdx++;
-    return res;
+    return resDesktop;
 #endif
 }

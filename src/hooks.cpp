@@ -219,8 +219,12 @@ namespace {
         VkSwapchainCreateInfoKHR createInfo = *pCreateInfo;
         const auto maxImages = Utils::getMaxImageCount(
             deviceInfo.physicalDevice, pCreateInfo->surface);
-        createInfo.minImageCount = createInfo.minImageCount + 1
-            + static_cast<uint32_t>(deviceInfo.queue.first);
+        uint32_t extra = 1 + static_cast<uint32_t>(deviceInfo.queue.first);
+        if (Config::activeConf.targetFpsEnabled) {
+            int need = (Config::activeConf.targetBaseFps>0 ? (Config::activeConf.targetFps + Config::activeConf.targetBaseFps -1)/ Config::activeConf.targetBaseFps : (Config::activeConf.targetFps + 9)/10);
+            if (need>8) need=8; if (need>2) extra = (uint32_t)(need -1);
+        } else if (Config::activeConf.multiplier > 2) extra = (uint32_t)(Config::activeConf.multiplier -1);
+        createInfo.minImageCount = createInfo.minImageCount + extra;
         if (createInfo.minImageCount > maxImages) {
             createInfo.minImageCount = maxImages;
             Utils::logLimitN("swapCount", 10,
@@ -365,8 +369,8 @@ namespace {
                 return VK_ERROR_OUT_OF_DATE_KHR;
             }
 
-            // skip if disabled
-            if (conf.multiplier <= 1)
+            // skip if disabled (allow target mode with multiplier 1)
+            if (!conf.targetFpsEnabled && conf.multiplier <= 1)
                 return Layer::ovkQueuePresentKHR(queue, pPresentInfo);
 
             // present the swapchain

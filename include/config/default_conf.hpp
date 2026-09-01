@@ -10,6 +10,9 @@ const std::string DEFAULT_CONFIG = R"(version = 1
 # hwme_maxmv = 128.0
 # hwme_debug = 0
 # timing_debug = false
+# target_fps_enabled = false
+# target_fps = 60
+# target_base_fps = 0  # 0=auto estimate R, else fixed base (e.g. 30) -> gen = target/base
 
 # [[game]] # example entry
 # exe = "Game.exe"

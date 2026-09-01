@@ -37,6 +37,12 @@ namespace Config {
         /// Timing debug single-line log, default false
         bool timingDebug{false};
 
+        /// Fixed target FPS mode: when enabled, ignore multiplier and gen to hit target
+        bool targetFpsEnabled{false};
+        int targetFps{60};
+        /// When >0, use this as real/base fps instead of auto-estimating R (fixes FIFO throttle artifacts)
+        int targetBaseFps{0};
+
         /// Path to the configuration file.
         std::filesystem::path config_file;
         /// File timestamp of the configuration file

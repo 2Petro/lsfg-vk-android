@@ -78,6 +78,9 @@ void Config::updateConfig(const std::string& file) {
         .hwmeMaxMv = static_cast<float>(toml::find_or(globalTable, "hwme_maxmv", 128.0)),
         .hwmeDebug = toml::find_or(globalTable, "hwme_debug", 0),
         .timingDebug = toml::find_or(globalTable, "timing_debug", false),
+        .targetFpsEnabled = toml::find_or(globalTable, "target_fps_enabled", false),
+        .targetFps = toml::find_or(globalTable, "target_fps", 60),
+        .targetBaseFps = toml::find_or(globalTable, "target_base_fps", 0),
         .config_file = file,
         .timestamp = std::filesystem::last_write_time(file)
     };
@@ -87,6 +90,10 @@ void Config::updateConfig(const std::string& file) {
         throw std::runtime_error("Global Multiplier cannot be less than 2");
     if (global.flowScale < 0.25F || global.flowScale > 1.0F)
         throw std::runtime_error("Flow scale must be between 0.25 and 1.0");
+    if (global.targetFps < 10 || global.targetFps > 480)
+        throw std::runtime_error("target_fps must be between 10 and 480");
+    if (global.targetBaseFps < 0 || global.targetBaseFps > 480)
+        throw std::runtime_error("target_base_fps must be between 0 and 480");
 
     // parse game-specific configuration
     std::unordered_map<std::string, Configuration> games;
@@ -110,6 +117,9 @@ void Config::updateConfig(const std::string& file) {
             .hwmeMaxMv = static_cast<float>(toml::find_or(gameTable, "hwme_maxmv", static_cast<double>(global.hwmeMaxMv))),
             .hwmeDebug = toml::find_or(gameTable, "hwme_debug", global.hwmeDebug),
             .timingDebug = toml::find_or(gameTable, "timing_debug", global.timingDebug),
+            .targetFpsEnabled = toml::find_or(gameTable, "target_fps_enabled", global.targetFpsEnabled),
+            .targetFps = toml::find_or(gameTable, "target_fps", global.targetFps),
+            .targetBaseFps = toml::find_or(gameTable, "target_base_fps", global.targetBaseFps),
             .config_file = file,
             .timestamp = global.timestamp
         };
@@ -119,6 +129,10 @@ void Config::updateConfig(const std::string& file) {
             throw std::runtime_error("Multiplier cannot be less than 1");
         if (game.flowScale < 0.25F || game.flowScale > 1.0F)
             throw std::runtime_error("Flow scale must be between 0.25 and 1.0");
+        if (game.targetFps < 10 || game.targetFps > 480)
+            throw std::runtime_error("target_fps must be between 10 and 480");
+        if (game.targetBaseFps < 0 || game.targetBaseFps > 480)
+            throw std::runtime_error("target_base_fps must be between 0 and 480");
         games[exe] = std::move(game);
     }
 
@@ -149,6 +163,12 @@ Configuration Config::getConfig(const std::pair<std::string, std::string>& name)
         if (hdr) conf.hdr = std::string(hdr) == "1";
         const char* e_present = std::getenv("LSFG_EXPERIMENTAL_PRESENT_MODE");
         if (e_present) conf.e_present = into_present(std::string(e_present));
+        const char* ten = std::getenv("LSFG_TARGET_FPS_ENABLED");
+        if (ten) conf.targetFpsEnabled = std::string(ten)=="1" || std::string(ten)=="true";
+        const char* tf = std::getenv("LSFG_TARGET_FPS");
+        if (tf) conf.targetFps = std::stoi(tf);
+        const char* tbf = std::getenv("LSFG_TARGET_BASE_FPS");
+        if (tbf) conf.targetBaseFps = std::stoi(tbf);
 
         return conf;
     }

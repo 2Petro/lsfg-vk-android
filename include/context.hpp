@@ -73,6 +73,9 @@ private:
 
     std::chrono::steady_clock::time_point lastPresentTime{};
     bool hasLastPresent{false};
+    size_t maxGenCount{0};
+    float smoothedRealFps{60.0f};
+    int lastNeeded{1};
 
     struct RenderPassInfo {
         Mini::CommandBuffer preCopyBuf; // copy from swapchain image to frame_0/frame_1
