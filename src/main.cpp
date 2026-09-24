@@ -47,6 +47,7 @@ namespace {
         // print config
         std::cerr << "lsfg-vk: Loaded configuration for " << name.second << ":\n";
         if (!conf.dll.empty()) std::cerr << "  Using DLL from: " << conf.dll << '\n';
+        if (!conf.npu_model.empty()) std::cerr << "  Using NPU model: " << conf.npu_model << '\n';
         std::cerr << "  Multiplier: " << conf.multiplier << '\n';
         std::cerr << "  Flow Scale: " << conf.flowScale << '\n';
         std::cerr << "  Performance Mode: " << (conf.performance ? "Enabled" : "Disabled") << '\n';
@@ -74,15 +75,19 @@ namespace {
             exit(EXIT_FAILURE);
         }
 
-        // load shaders
-        try {
-            Extract::extractShaders();
-        } catch (const std::exception& e) {
-            std::cerr << "lsfg-vk: An error occurred while trying to extract the shaders, exiting:\n";
-            std::cerr << "- " << e.what() << '\n';
-            exit(EXIT_FAILURE);
+        // load shaders (DLL path only; NPU path needs no Lossless.dll)
+        if (conf.npu_model.empty()) {
+            try {
+                Extract::extractShaders();
+            } catch (const std::exception& e) {
+                std::cerr << "lsfg-vk: An error occurred while trying to extract the shaders, exiting:\n";
+                std::cerr << "- " << e.what() << '\n';
+                exit(EXIT_FAILURE);
+            }
+            std::cerr << "lsfg-vk: Shaders extracted successfully.\n";
+        } else {
+            std::cerr << "lsfg-vk: NPU framegen selected, skipping DLL shader extract.\n";
         }
-        std::cerr << "lsfg-vk: Shaders extracted successfully.\n";
 
         // run benchmark if requested
         const char* benchmark_flag = std::getenv("LSFG_BENCHMARK");

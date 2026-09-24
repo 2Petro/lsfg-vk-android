@@ -72,11 +72,22 @@ void Config::updateConfig(const std::string& file) {
 
     // parse global configuration
     const toml::value globalTable = toml::find_or_default<toml::table>(toml, "global");
-    const Configuration global{
+    Configuration global{
         .dll =   toml::find_or(globalTable, "dll", std::string()),
         .config_file = file,
         .timestamp = std::filesystem::last_write_time(file)
     };
+    global.npu_model = toml::find_or(globalTable, "npu_model", std::string());
+    if (const char* e = std::getenv("LSFG_NPU_MODEL")) {
+        if (*e) global.npu_model = e;
+    } else if (const char* e2 = std::getenv("VKHOOK_NPU_MODEL")) {
+        if (*e2) global.npu_model = e2;
+    }
+    if (const char* b = std::getenv("LSFG_NPU_BIN")) {
+        if (*b) global.npu_bin = b;
+    } else if (const char* b2 = std::getenv("VKHOOK_NPU_BIN")) {
+        if (*b2) global.npu_bin = b2;
+    }
 
     // validate global configuration
     if (global.multiplier < 2)
@@ -102,6 +113,8 @@ void Config::updateConfig(const std::string& file) {
             .performance = toml::find_or(gameTable, "performance_mode", false),
             .hdr = toml::find_or(gameTable, "hdr_mode", false),
             .e_present =   into_present(toml::find_or(gameTable, "experimental_present_mode", "")),
+            .npu_model = toml::find_or(gameTable, "npu_model", global.npu_model),
+            .npu_bin = global.npu_bin,
             .config_file = file,
             .timestamp = global.timestamp
         };
@@ -141,20 +154,41 @@ Configuration Config::getConfig(const std::pair<std::string, std::string>& name)
         if (hdr) conf.hdr = std::string(hdr) == "1";
         const char* e_present = std::getenv("LSFG_EXPERIMENTAL_PRESENT_MODE");
         if (e_present) conf.e_present = into_present(std::string(e_present));
+        if (const char* nm = std::getenv("LSFG_NPU_MODEL")) {
+            if (*nm) conf.npu_model = nm;
+        } else if (const char* nm2 = std::getenv("VKHOOK_NPU_MODEL")) {
+            if (*nm2) conf.npu_model = nm2;
+        }
+        if (const char* nb = std::getenv("LSFG_NPU_BIN")) {
+            if (*nb) conf.npu_bin = nb;
+        } else if (const char* nb2 = std::getenv("VKHOOK_NPU_BIN")) {
+            if (*nb2) conf.npu_bin = nb2;
+        }
 
         return conf;
     }
 
     // process new configuration system
-    if (!gameConfs.has_value())
-        return globalConf;
-
-    const auto& games = *gameConfs;
-    auto it = std::ranges::find_if(games, [&name](const auto& pair) {
-        return name.first.ends_with(pair.first) || (name.second == pair.first);
-    });
-    if (it != games.end())
-        return it->second;
-
-    return globalConf;
+    Configuration picked;
+    if (!gameConfs.has_value()) {
+        picked = globalConf;
+    } else {
+        const auto& games = *gameConfs;
+        auto it = std::ranges::find_if(games, [&name](const auto& pair) {
+            return name.first.ends_with(pair.first) || (name.second == pair.first);
+        });
+        picked = (it != games.end()) ? it->second : globalConf;
+    }
+    // env always wins for the NPU second option (lets tests force it)
+    if (const char* nm = std::getenv("LSFG_NPU_MODEL")) {
+        if (*nm) picked.npu_model = nm;
+    } else if (const char* nm2 = std::getenv("VKHOOK_NPU_MODEL")) {
+        if (*nm2) picked.npu_model = nm2;
+    }
+    if (const char* nb = std::getenv("LSFG_NPU_BIN")) {
+        if (*nb) picked.npu_bin = nb;
+    } else if (const char* nb2 = std::getenv("VKHOOK_NPU_BIN")) {
+        if (*nb2) picked.npu_bin = nb2;
+    }
+    return picked;
 }

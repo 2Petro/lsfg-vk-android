@@ -28,6 +28,13 @@ namespace Config {
         /// Experimental flag for overriding the synchronization method.
         VkPresentModeKHR e_present;
 
+        /// Second framegen option: path to an NPU ONNX model (e.g. RIFE
+        /// 400x300). Empty = DLL/shader path. Set via TOML `npu_model` or
+        /// env LSFG_NPU_MODEL (fallback VKHOOK_NPU_MODEL).
+        std::string npu_model;
+        /// Worker binary override (env LSFG_NPU_BIN / VKHOOK_NPU_BIN).
+        std::string npu_bin;
+
         /// Path to the configuration file.
         std::filesystem::path config_file;
         /// File timestamp of the configuration file

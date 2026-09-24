@@ -34,6 +34,7 @@ file(GLOB SOURCES
     "src/config/*.cpp"
     "src/extract/*.cpp"
     "src/mini/*.cpp"
+    "src/npu/*.cpp"
     "src/utils/*.cpp"
     "src/*.cpp"
 )

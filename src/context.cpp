@@ -29,7 +29,8 @@
 #include <array>
 
 LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
-        VkExtent2D extent, const std::vector<VkImage>& swapchainImages)
+        VkExtent2D extent, const std::vector<VkImage>& swapchainImages,
+        VkFormat swapFormat)
         : swapchain(swapchain), swapchainImages(swapchainImages),
           extent(extent) {
     // get updated configuration
@@ -67,11 +68,20 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
         if (conf.multiplier <= 1) return;
     }
+    // Second framegen option: NPU (RIFE ONNX on Hexagon HTP). Fixed RGBA8
+    // internal format — the pack-back shader is proven against 8-bit —
+    // regardless of the HDR flag. The DLL/shader path keeps its logic below.
+    this->useNpu = !conf.npu_model.empty();
     // we could take the format from the swapchain,
     // but honestly this is safer.
-    const VkFormat format = conf.hdr
+    VkFormat format = conf.hdr
         ? VK_FORMAT_R8G8B8A8_UNORM
         : VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (this->useNpu) {
+        format = VK_FORMAT_R8G8B8A8_UNORM;
+        this->npuOutFormat = format;
+        std::cerr << "lsfg-vk: NPU framegen selected (" << conf.npu_model << ")\n";
+    }
 
 #ifdef __ANDROID__
     // Android path: use AHardwareBuffer-backed images for sharing with framegen.
@@ -129,7 +139,58 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     std::cerr << "lsfg-vk: Android AHB context created (id=" << ctxId << ")\n";
 
 #else
-    // Desktop Linux path: use OPAQUE_FD-based image sharing
+    // Desktop Linux (glibc/Turnip) path.
+    if (this->useNpu) {
+        // NPU framegen: keep lsfg's frame-delivery skeleton (frame_0/frame_1
+        // captures + out_n delivery images + swapchain handling below) but
+        // replace ONLY the DLL/shader interpolation with the NPU backend.
+        // out_n needs STORAGE usage for the pack-back compute write; the
+        // existing postCopy (TRANSFER_SRC -> swapchain) is unchanged.
+        std::array<int, 2> fds{};
+        this->frame_0 = Mini::Image(info.device, info.physicalDevice,
+            extent, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+            &fds.at(0));
+        this->frame_1 = Mini::Image(info.device, info.physicalDevice,
+            extent, format, VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT,
+            &fds.at(1));
+
+        std::vector<int> outFds(conf.multiplier - 1);
+        for (size_t i = 0; i < (conf.multiplier - 1); ++i)
+            this->out_n.emplace_back(info.device, info.physicalDevice,
+                extent, format,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT,
+                &outFds.at(i));
+
+        // NPU worker dims come from the model graph (e.g. 400x300); swap
+        // format is the app's real swapchain format for convert sampling.
+        VkFormat srcFmt = swapFormat != VK_FORMAT_UNDEFINED
+            ? swapFormat : VK_FORMAT_B8G8R8A8_SRGB;
+        this->npuDeviceInfo = info;
+        if (!this->npu_.init(info.device, info.physicalDevice,
+                info.queue.second, info.queue.first,
+                extent, srcFmt, conf.npu_model, conf.npu_bin)) {
+            std::cerr << "lsfg-vk: NPU backend failed, falling back to passthrough\n";
+            this->useNpu = false;
+        } else {
+            std::cerr << "lsfg-vk: NPU backend ready (swap fmt=" << (int)srcFmt << ")\n";
+            // Model-size pack target (native res): TRANSFER_SRC for the
+            // delivery upscale blit + STORAGE for the pack compute write.
+            VkExtent2D packExt{ (uint32_t)this->npu_.modelW(),
+                                (uint32_t)this->npu_.modelH() };
+            int packFd = -1;
+            this->npuPackTarget = Mini::Image(info.device, info.physicalDevice,
+                packExt, format,
+                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+                VK_IMAGE_ASPECT_COLOR_BIT, &packFd);
+            this->npu_.setPackTarget(this->npuPackTarget.handle());
+            this->hasPackTarget = true;
+            std::cerr << "lsfg-vk: NPU pack target " << packExt.width << "x"
+                      << packExt.height << "\n";
+        }
+    }
+    if (!this->useNpu) {
+    // DLL/shader path: use OPAQUE_FD-based image sharing
 
     std::array<int, 2> fds{};
     this->frame_0 = Mini::Image(info.device, info.physicalDevice,
@@ -174,6 +235,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     );
 
     unsetenv("DISABLE_LSFG"); // NOLINT
+    } // end DLL/shader path (skipped when NPU active)
 #endif
 
     // prepare render passes
@@ -340,12 +402,35 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     pass.preCopyBuf.submit(info.queue.second, waitSems, signalSems);
 
     // --- STEP 5: EXPORT SYNC FD (The Fix) ---
+    // DLL path only: exporting moves the payload out of preCopySemaphores[0]
+    // into the fd consumed by presentContext — the semaphore is left
+    // unsignaled and must never be waited on afterwards. The NPU path skips
+    // this (ordering comes from same-queue submission order + its own
+    // fences), so both pre-copy semaphores stay signaled and waitable.
     int preCopySemaphoreFd = -1;
-    pass.preCopySemaphores.at(0).exportSyncFd(info.device, &preCopySemaphoreFd);
+    if (!this->useNpu)
+        pass.preCopySemaphores.at(0).exportSyncFd(info.device, &preCopySemaphoreFd);
 
-    // --- STEP 6: LSFG & INTERMEDIARY FRAMES ---
+    // --- STEP 6: FRAMEGEN & INTERMEDIARY FRAMES ---
+    // NPU path: swap ONLY the generation call. Handoff runs purely on the
+    // proven protocol inside Npu::Backend (dma_buf fds, GPU fence wait per
+    // submit, socket ping-pong, wall-clock splits, FNV cross-check) — none
+    // of lsfg's frame-timing sync is reused for it. Delivery below
+    // (acquire/postCopy/present) is the untouched lsfg skeleton.
     std::vector<int> renderSemaphoreFds;
-    if (conf.multiplier > 1) {
+    bool haveGenerated = false;
+    if (this->useNpu) {
+        // Same-queue submission order guarantees convert runs after the
+        // preCopy above (which waited on the game semaphores).
+        haveGenerated = this->npu_.generate(
+            this->swapchainImages.at(presentIdx),
+            this->out_n.at(0).handle(), this->frameIdx);
+        // NPU v1 is 2x: exactly one interpolated frame per present.
+        if (haveGenerated && conf.multiplier > 1) {
+            renderSemaphoreFds.resize(1, -1);
+            pass.renderSemaphores.resize(1);
+        }
+    } else if (conf.multiplier > 1) {
         //printf("[LSFG_DEBUG] Entering multiplier > 1 block (Frame: %llu)\n", (unsigned long long)this->frameIdx); fflush(stdout);
 
         renderSemaphoreFds.resize(conf.multiplier - 1, -1);
@@ -359,8 +444,22 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         // Immediate cleanup of FDs to try and stretch the life of the process
         for (int &fd : renderSemaphoreFds) { if (fd >= 0) { close(fd); fd = -1; } }
         if (preCopySemaphoreFd >= 0) { close(preCopySemaphoreFd); preCopySemaphoreFd = -1; }
+        haveGenerated = true; // DLL path always yields multiplier-1 frames
+    }
 
-        for (size_t i = 0; i < (conf.multiplier - 1); i++) {
+    // Shared delivery: copy generated frame(s) to fresh swapchain images and
+    // present them (untouched lsfg skeleton + vsync pacing).
+    double deliveryT0 = 0;
+    bool timeDelivery = this->useNpu && getenv("LSFG_NPU_VERBOSE");
+    if (timeDelivery) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        deliveryT0 = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6;
+    }
+    {
+        const size_t nGen = this->useNpu ? 1 : (conf.multiplier - 1);
+        const bool doGen = this->useNpu ? haveGenerated : (conf.multiplier > 1);
+        for (size_t i = 0; doGen && i < nGen; i++) {
             //printf("[LSFG_DEBUG] Loop %zu: Acquire\n", i); fflush(stdout);
             pass.acquireSemaphores.at(i) = Mini::Semaphore(info.device);
             uint32_t imageIdx{};
@@ -372,12 +471,77 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
             pass.postCopyBufs.at(i) = Mini::CommandBuffer(info.device, this->cmdPool);
 
             pass.postCopyBufs.at(i).begin();
-            Utils::copyImage(pass.postCopyBufs.at(i).handle(),
-                this->out_n.at(i).handle(),
-                this->swapchainImages.at(imageIdx),
-                this->extent.width, this->extent.height,
-                VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
-                false, true);
+            if (this->useNpu && this->hasPackTarget) {
+                // NPU delivery: HW-blit the model-size pack target up to the
+                // swapchain image (LINEAR). Same layout dance as copyImage
+                // but scaled — keeps pack fill-rate at model pixels.
+                VkCommandBuffer cb = pass.postCopyBufs.at(i).handle();
+                VkImage src = this->npuPackTarget.handle();
+                VkImage dst = this->swapchainImages.at(imageIdx);
+                uint32_t sw = (uint32_t)this->npu_.modelW();
+                uint32_t sh = (uint32_t)this->npu_.modelH();
+                uint32_t dw = this->extent.width, dh = this->extent.height;
+                const VkImageMemoryBarrier srcB{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .image = src,
+                    .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                         .levelCount = 1, .layerCount = 1}};
+                const VkImageMemoryBarrier dstB{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .image = dst,
+                    .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                         .levelCount = 1, .layerCount = 1}};
+                const VkImageMemoryBarrier pre[2] = {srcB, dstB};
+                Layer::ovkCmdPipelineBarrier(
+                    cb, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                    2, pre);
+                const VkImageBlit blit{
+                    .srcSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                       .layerCount = 1},
+                    .srcOffsets = {{0, 0, 0},
+                                   {(int32_t)sw, (int32_t)sh, 1}},
+                    .dstSubresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                       .layerCount = 1},
+                    .dstOffsets = {{0, 0, 0},
+                                   {(int32_t)dw, (int32_t)dh, 1}}};
+                Layer::ovkCmdBlitImage(cb, src, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    dst, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                    VK_FILTER_LINEAR);
+                const VkImageMemoryBarrier srcBack{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    .image = src,
+                    .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                         .levelCount = 1, .layerCount = 1}};
+                const VkImageMemoryBarrier dstGo{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_MEMORY_READ_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    .newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    .image = dst,
+                    .subresourceRange = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                         .levelCount = 1, .layerCount = 1}};
+                const VkImageMemoryBarrier post[2] = {srcBack, dstGo};
+                Layer::ovkCmdPipelineBarrier(
+                    cb, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                    VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                    nullptr, 2, post);
+            } else {
+                Utils::copyImage(pass.postCopyBufs.at(i).handle(),
+                    this->out_n.at(i).handle(),
+                    this->swapchainImages.at(imageIdx),
+                    this->extent.width, this->extent.height,
+                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+                    false, true);
+            }
             pass.postCopyBufs.at(i).end();
 
             // RAW SUBMISSION - The part that worked
@@ -415,9 +579,19 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
 
     // FINAL FRAME
     //printf("[LSFG_DEBUG] Final Frame Present\n"); fflush(stdout);
-    VkSemaphore finalWait = (conf.multiplier > 1) ?
-        pass.postCopySemaphores.at(conf.multiplier - 2).handle() :
-        pass.preCopySemaphores.at(0).handle();
+    // NPU without a generated frame yet (first present): preCopySemaphores[0]
+    // was never exported in NPU mode so both are intact — but only [1] is
+    // guaranteed signaled-and-unconsumed for this pass; [0] is reserved for
+    // the DLL export pattern. Never touch a default (empty) semaphore.
+    const bool genDone = this->useNpu ? haveGenerated : (conf.multiplier > 1);
+    VkSemaphore finalWait = VK_NULL_HANDLE;
+    if (genDone) {
+        finalWait = this->useNpu
+            ? pass.postCopySemaphores.at(0).handle()
+            : pass.postCopySemaphores.at(conf.multiplier - 2).handle();
+    } else {
+        finalWait = pass.preCopySemaphores.at(1).handle();
+    }
 
     const VkPresentInfoKHR finalPresentInfo{
         .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
@@ -429,6 +603,19 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
     };
 
     auto res = Layer::ovkQueuePresentKHR(queue, &finalPresentInfo);
+    if (timeDelivery) {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        double ms = ts.tv_sec * 1000.0 + ts.tv_nsec / 1e6 - deliveryT0;
+        struct timespec ts2;
+        clock_gettime(CLOCK_MONOTONIC, &ts2);
+        fprintf(stderr,
+                "[LSFG-NPU t=%llu.%03llu] frame %llu delivery %.1fms%s\n",
+                (unsigned long long)ts2.tv_sec,
+                (unsigned long long)(ts2.tv_nsec / 1000000ULL),
+                (unsigned long long)this->frameIdx, ms,
+                haveGenerated ? "" : " (passthrough)");
+    }
         // --- AGGRESSIVE BYPASS TEST ---
     // Instead of sleep, we waste cycles to ensure the driver has
     // time to process the command stream.
