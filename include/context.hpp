@@ -12,6 +12,7 @@
 #include "mini/commandpool.hpp"
 #include "mini/image.hpp"
 #include "mini/semaphore.hpp"
+#include "npu/npu_backend.hpp"
 
 #include <array>
 #include <chrono>
@@ -35,7 +36,8 @@ public:
     /// @throws LSFG::vulkan_error if any Vulkan call fails.
     ///
     LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
-        VkExtent2D extent, const std::vector<VkImage>& swapchainImages);
+        VkExtent2D extent, const std::vector<VkImage>& swapchainImages,
+        VkFormat swapFormat = VK_FORMAT_UNDEFINED);
 
     ///
     /// Custom present logic.
@@ -63,9 +65,17 @@ private:
     std::vector<VkImage> swapchainImages;
     VkExtent2D extent;
 
-    std::shared_ptr<int32_t> lsfgCtxId; // lsfg context id
+    std::shared_ptr<int32_t> lsfgCtxId; // lsfg context id (DLL path only)
     Mini::Image frame_0, frame_1; // frames shared with lsfg. write to frame_0 when fc % 2 == 0
     std::vector<Mini::Image> out_n; // output images shared with lsfg, indexed by framegen id
+
+    // Second framegen option: NPU (RIFE ONNX on Hexagon HTP). When active,
+    // lsfgCtxId stays empty and present() calls npu_ instead of the
+    // DLL/HWME path. Surrounding sync/present skeleton is unchanged.
+    bool useNpu{false};
+    Npu::Backend npu_;
+    Hooks::DeviceInfo npuDeviceInfo{};
+    VkFormat npuOutFormat{VK_FORMAT_R8G8B8A8_UNORM};
 
     Mini::CommandPool cmdPool;
     uint64_t frameIdx{0};

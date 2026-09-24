@@ -72,7 +72,7 @@ void Config::updateConfig(const std::string& file) {
 
     // parse global configuration
     const toml::value globalTable = toml::find_or_default<toml::table>(toml, "global");
-    const Configuration global{
+    Configuration global{
         .dll =   toml::find_or(globalTable, "dll", std::string()),
         .hwme = toml::find_or(globalTable, "hwme", true),
         .hwmeMaxMv = static_cast<float>(toml::find_or(globalTable, "hwme_maxmv", 128.0)),
@@ -81,6 +81,13 @@ void Config::updateConfig(const std::string& file) {
         .targetFpsEnabled = toml::find_or(globalTable, "target_fps_enabled", false),
         .targetFps = toml::find_or(globalTable, "target_fps", 60),
         .targetBaseFps = toml::find_or(globalTable, "target_base_fps", 0),
+        .npu_model = toml::find_or(globalTable, "npu_model", std::string()),
+        .npu_bin = toml::find_or(globalTable, "npu_bin", std::string()),
+        .worker_sh = toml::find_or(globalTable, "worker_sh", std::string()),
+        .npu_verify_every = toml::find_or(globalTable, "npu_verify_every", 240L),
+        .npu_verbose = toml::find_or(globalTable, "npu_verbose", false),
+        .npu_dryrun = toml::find_or(globalTable, "npu_dryrun", false),
+        .npu_nosync = toml::find_or(globalTable, "npu_nosync", false),
         .config_file = file,
         .timestamp = std::filesystem::last_write_time(file)
     };
@@ -120,6 +127,13 @@ void Config::updateConfig(const std::string& file) {
             .targetFpsEnabled = toml::find_or(gameTable, "target_fps_enabled", global.targetFpsEnabled),
             .targetFps = toml::find_or(gameTable, "target_fps", global.targetFps),
             .targetBaseFps = toml::find_or(gameTable, "target_base_fps", global.targetBaseFps),
+            .npu_model = toml::find_or(gameTable, "npu_model", global.npu_model),
+            .npu_bin = toml::find_or(gameTable, "npu_bin", global.npu_bin),
+            .worker_sh = toml::find_or(gameTable, "worker_sh", global.worker_sh),
+            .npu_verify_every = toml::find_or(gameTable, "npu_verify_every", global.npu_verify_every),
+            .npu_verbose = toml::find_or(gameTable, "npu_verbose", global.npu_verbose),
+            .npu_dryrun = toml::find_or(gameTable, "npu_dryrun", global.npu_dryrun),
+            .npu_nosync = toml::find_or(gameTable, "npu_nosync", global.npu_nosync),
             .config_file = file,
             .timestamp = global.timestamp
         };

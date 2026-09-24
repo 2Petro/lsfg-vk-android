@@ -241,6 +241,9 @@ namespace {
         // allow copy operations on swapchain images
         createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
         createInfo.imageUsage |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        // NPU framegen path samples swapchain images in a convert shader;
+        // harmless for the DLL/HWME path.
+        createInfo.imageUsage |= VK_IMAGE_USAGE_SAMPLED_BIT;
 
         // enforce present mode
         createInfo.presentMode = Config::activeConf.e_present;
@@ -275,7 +278,7 @@ namespace {
             swapchainToDeviceTable.emplace(*pSwapchain, device);
             swapchains.emplace(*pSwapchain, LsContext(
                 deviceInfo, *pSwapchain, pCreateInfo->imageExtent,
-                swapchainImages
+                swapchainImages, pCreateInfo->imageFormat
             ));
 
             std::cerr << "lsfg-vk: Swapchain context " <<

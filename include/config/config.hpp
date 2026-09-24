@@ -43,6 +43,27 @@ namespace Config {
         /// When >0, use this as real/base fps instead of auto-estimating R (fixes FIFO throttle artifacts)
         int targetBaseFps{0};
 
+        /// NPU framegen (RIFE ONNX on Hexagon HTP) second option. Empty
+        /// npu_model = DLL/shader path (default). All TOML-driven: no
+        /// environment is available in the Android app process.
+        /// Path to the NPU ONNX model (e.g. rife46_400x300_ft_slim_fp16).
+        std::string npu_model;
+        /// Worker binary override (bionic npu_interp).
+        std::string npu_bin;
+        /// Android launch script: sh <worker_sh> <model> <bin> <sockfd>.
+        /// Sets up env (LD_LIBRARY_PATH, ADSP_LIBRARY_PATH) and execs the
+        /// worker. Empty = exec workerBin directly (bionic) — glibc uses
+        /// the linker64 dispatch instead.
+        std::string worker_sh;
+        /// FNV cross-check cadence in runs (0 = off after proof).
+        long npu_verify_every{240};
+        /// Per-frame stage logging (goes to lsfg.log on Android).
+        bool npu_verbose{false};
+        /// Passthrough: run skeleton/delivery without NPU work.
+        bool npu_dryrun{false};
+        /// Skip DMA_BUF_SYNC ioctls around handoffs.
+        bool npu_nosync{false};
+
         /// Path to the configuration file.
         std::filesystem::path config_file;
         /// File timestamp of the configuration file

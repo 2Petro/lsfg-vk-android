@@ -32,7 +32,8 @@
 #include <array>
 
 LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
-        VkExtent2D extent, const std::vector<VkImage>& swapchainImages)
+        VkExtent2D extent, const std::vector<VkImage>& swapchainImages,
+        VkFormat swapFormat)
         : swapchain(swapchain), swapchainImages(swapchainImages),
           extent(extent) {
     // get updated configuration
@@ -71,11 +72,22 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
 
         if (!conf.targetFpsEnabled && conf.multiplier <= 1) return;
     }
+    // Second framegen option: NPU (RIFE ONNX on Hexagon HTP). Fixed RGBA8
+    // internal format — the pack-back path is proven against 8-bit —
+    // regardless of the HDR flag. The DLL/HWME path keeps its logic below.
+    this->useNpu = !conf.npu_model.empty();
     // we could take the format from the swapchain,
     // but honestly this is safer.
-    const VkFormat format = conf.hdr
+    VkFormat format = conf.hdr
         ? VK_FORMAT_R8G8B8A8_UNORM
         : VK_FORMAT_R16G16B16A16_SFLOAT;
+    if (this->useNpu) {
+        format = VK_FORMAT_R8G8B8A8_UNORM;
+        this->npuOutFormat = format;
+        std::cerr << "lsfg-vk: NPU framegen selected (" << conf.npu_model << ")\n";
+        if (!conf.worker_sh.empty())
+            std::cerr << "lsfg-vk: NPU worker script (" << conf.worker_sh << ")\n";
+    }
 
 #ifdef __ANDROID__
     // Android path: use AHardwareBuffer-backed images for sharing with framegen.
@@ -108,6 +120,30 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             extent, format,
             VK_IMAGE_USAGE_TRANSFER_SRC_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
 
+    // NPU framegen: keep the AHB frame-delivery skeleton (frame_0/frame_1
+    // captures + out_n delivery images) but replace ONLY the DLL/HWME
+    // interpolation with the NPU backend. AHB VkImages are already
+    // STORAGE-capable, so pack-back needs no image changes. All NPU-shared
+    // memory is DMA-BUF external memory; AHB stays app-facing only.
+    if (this->useNpu) {
+        VkFormat srcFmt = swapFormat != VK_FORMAT_UNDEFINED
+            ? swapFormat : VK_FORMAT_R8G8B8A8_UNORM;
+        this->npuDeviceInfo = info;
+        this->npu_.setVerbose(conf.npu_verbose);
+        this->npu_.setDryRun(conf.npu_dryrun);
+        this->npu_.setNoSync(conf.npu_nosync);
+        this->npu_.setVerifyEvery(conf.npu_verify_every);
+        if (!this->npu_.init(info.device, info.physicalDevice,
+                info.queue.second, info.queue.first,
+                extent, srcFmt, conf.npu_model, conf.npu_bin,
+                conf.worker_sh)) {
+            std::cerr << "lsfg-vk: NPU backend failed, falling back to DLL path\n";
+            this->useNpu = false;
+        } else {
+            std::cerr << "lsfg-vk: NPU backend ready (swap fmt=" << (int)srcFmt << ")\n";
+        }
+    }
+    if (!this->useNpu) {
     // initialize lsfg
     const std::function<std::vector<uint8_t>(const std::string&)> shaderLoader =
         [](const std::string& name) {
@@ -182,6 +218,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
     unsetenv("DISABLE_LSFG"); // NOLINT
 
     std::cerr << "lsfg-vk: Android AHB context created (id=" << ctxId << ")\n";
+    } // end DLL/HWME path (skipped when NPU active)
 
 #else
     // Desktop Linux path: use OPAQUE_FD-based image sharing
@@ -349,9 +386,27 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         gameRenderSemaphores2,
         { pass.preCopySemaphores.at(1).handle() });
 
+    // NPU framegen: swap ONLY the generation call. Handoff runs purely on
+    // the proven protocol inside Npu::Backend (dma_buf fds, GPU fence wait
+    // per submit, socket ping-pong, wall-clock splits, FNV cross-check).
+    // Delivery below (acquire/postCopy/present) is the untouched skeleton.
+    // NPU v1 is 2x: exactly one interpolated frame per present.
+    bool haveGenerated = false;
+    if (this->useNpu) {
+        if (this->frameIdx == 0)
+            std::cerr << "lsfg-vk: NPU present path active\n";
+        // Same-queue submission order guarantees convert runs after the
+        // preCopy above (which waited on the game semaphores).
+        haveGenerated = this->npu_.generate(
+            this->swapchainImages.at(presentIdx),
+            this->out_n.at(0).handle(), this->frameIdx);
+        neededGen = haveGenerated ? 1 : 0;
+        if (neededGen > this->maxGenCount) neededGen = this->maxGenCount;
+    }
+
     bool hwUsed = false;
     if (timingEnabled) tGenStart = std::chrono::steady_clock::now();
-    if (neededGen>0 && this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
+    if (!this->useNpu && neededGen>0 && this->frameIdx > 0 && LSFG::HwMe::isEnabled()) {
         if (LSFG::HwMe::available()) {
             Layer::ovkQueueSubmit(info.queue.second, 0, nullptr, VK_NULL_HANDLE);
             AHardwareBuffer* prev = (this->frameIdx % 2 == 0) ? this->frame_1.getAhb() : this->frame_0.getAhb();
@@ -374,7 +429,7 @@ VkResult LsContext::present(const Hooks::DeviceInfo& info, const void* pNext, Vk
         }
     }
 
-    if (!hwUsed) {
+    if (!this->useNpu && !hwUsed) {
         if (neededGen>0) {
             if (this->hostSync) {
                 LSFG_3_1P::presentContextNative(*this->lsfgCtxId,
