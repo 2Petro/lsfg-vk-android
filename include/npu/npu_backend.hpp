@@ -58,6 +58,9 @@ public:
     void setDryRun(bool v) { dryRun_ = v; } // passthrough, keeps skeleton
     void setNoSync(bool v) { noSync_ = v; } // skip DMA_BUF_SYNC ioctls
     void setVerifyEvery(long n) { verifyEvery_ = n; } // 0 = verify off
+    // HTP power/perf (QNN htp_performance_mode): burst|balanced|
+    // power-saver|...; forwarded to the worker. Default burst.
+    void setPerfMode(const std::string& m) { perfMode_ = m; }
 
     // Convert curSwapImage into NPU input slot (frameIdx%2); when frameIdx>=1
     // run the worker on the pair and pack the interpolated frame into
@@ -191,6 +194,7 @@ private:
 
     // TOML-driven behavior (see setters; defaults = production).
     std::string workerSh_;
+    std::string perfMode_ = "burst";
     bool verbose_ = false;
     bool dryRun_ = false;
     bool noSync_ = false;

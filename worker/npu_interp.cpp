@@ -81,7 +81,8 @@ struct ManagedBuffer {
     }
 };
 
-std::unordered_map<std::string, std::string> BuildQnnOptions(bool shared) {
+std::unordered_map<std::string, std::string> BuildQnnOptions(bool shared,
+                                                             const std::string& perfMode) {
     std::unordered_map<std::string, std::string> opts = {
         {"backend_path", "libQnnHtp.so"},
         {"htp_graph_finalization_optimization_mode", "3"},
@@ -89,7 +90,7 @@ std::unordered_map<std::string, std::string> BuildQnnOptions(bool shared) {
         {"qnn_context_priority", "high"},
         {"rpc_control_latency", "100"},
         {"vtcm_mb", "8"},
-        {"htp_performance_mode", "burst"},
+        {"htp_performance_mode", perfMode.empty() ? "burst" : perfMode},
     };
     if (shared) opts["enable_htp_shared_memory_allocator"] = "1";
     return opts;
@@ -122,15 +123,19 @@ static uint64_t fnv_of(const void* data, size_t n) {
 
 int main(int argc, char* argv[]) {
     if (argc < 3) {
-        std::cout << "Usage: " << argv[0] << " <model.onnx> <sockfd>\n";
+        std::cout << "Usage: " << argv[0] << " <model.onnx> <sockfd> [perf_mode]\n";
         return 1;
     }
     std::string model_path = argv[1];
     int sock = std::atoi(argv[2]);
+    // HTP power/perf tradeoff (QNN htp_performance_mode): burst (default,
+    // max), balanced, power-saver, sustained_high_performance, ... The
+    // layer passes TOML npu_perf_mode through the launch script.
+    std::string perf_mode = argc >= 4 ? argv[3] : "burst";
     std::string ctx_path = model_path + ".ctx.onnx";
 
     Ort::Env env(ORT_LOGGING_LEVEL_FATAL, "NPU_INTERP");
-    if (!file_exists(ctx_path) && model_path.find(".ctx.onnx") == std::string::npos) {
+    auto gen_ctx = [&]() {
         std::cerr << "[NPUW] compiling graph -> " << ctx_path << "...\n";
         Ort::SessionOptions go;
         go.SetLogSeverityLevel(4);
@@ -138,15 +143,25 @@ int main(int argc, char* argv[]) {
         go.AddConfigEntry("ep.context_file_path", ctx_path.c_str());
         go.AddConfigEntry("ep.context_embed_mode", "1");
         go.AddConfigEntry("session.disable_cpu_ep_fallback", "0");
-        auto q = BuildQnnOptions(true);
+        auto q = BuildQnnOptions(true, perf_mode);
         q.erase("htp_performance_mode");
         go.AppendExecutionProvider("QNN", q);
         Ort::Session gs(env, model_path.c_str(), go);
         std::cerr << "[NPUW] ctx generated.\n";
+    };
+    if (!file_exists(ctx_path) && model_path.find(".ctx.onnx") == std::string::npos) {
+        try {
+            gen_ctx();
+        } catch (const Ort::Exception& e) {
+            std::cerr << "[NPUW] ctx compile failed: " << e.what() << "\n";
+            return 1;
+        }
     }
     std::string active = file_exists(ctx_path) ? ctx_path : model_path;
     std::unique_ptr<Ort::Session> session;
     bool want_shared = true;
+    bool recompiled = false;
+    for (int attempt = 0; attempt < 2 && !session; attempt++) {
     for (auto at : {std::make_pair(true, false), std::make_pair(false, false),
                     std::make_pair(true, true), std::make_pair(false, true)}) {
         try {
@@ -157,15 +172,39 @@ int main(int argc, char* argv[]) {
             so.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
             so.SetLogSeverityLevel(4);
             so.AddConfigEntry("session.disable_cpu_ep_fallback", at.second ? "0" : "1");
-            so.AppendExecutionProvider("QNN", BuildQnnOptions(at.first));
+            so.AppendExecutionProvider("QNN", BuildQnnOptions(at.first, perf_mode));
             session = std::make_unique<Ort::Session>(env, active.c_str(), so);
             want_shared = at.first;
             std::cerr << "[NPUW] session loaded (shared " << (at.first ? "on" : "off")
-                      << ", fallback " << (at.second ? "ALLOW" : "off") << ")\n";
+                      << ", fallback " << (at.second ? "ALLOW" : "off")
+                      << ", perf " << perf_mode << ")\n";
             break;
         } catch (const Ort::Exception& e) {
             std::cerr << "[NPUW] load failed: " << e.what() << "\n";
         }
+    }
+    if (!session && !recompiled && active == ctx_path && file_exists(ctx_path)) {
+        // Stale/incompatible context (e.g. compiled under a different QNN
+        // stack or options): quarantine it and compile fresh from the base
+        // model instead of dying. The .bad file is kept as evidence.
+        std::string bad = ctx_path + ".bad";
+        std::remove(bad.c_str());
+        if (std::rename(ctx_path.c_str(), bad.c_str()) == 0) {
+            std::cerr << "[NPUW] ctx unusable, quarantined to " << bad
+                      << ", recompiling from base model...\n";
+            try {
+                gen_ctx();
+            } catch (const Ort::Exception& e) {
+                std::cerr << "[NPUW] recompile failed: " << e.what() << "\n";
+                return 1;
+            }
+            active = file_exists(ctx_path) ? ctx_path : model_path;
+            recompiled = true;
+        } else {
+            std::cerr << "[NPUW] ctx unusable and cannot quarantine; aborting\n";
+            return 1;
+        }
+    }
     }
     if (!session) return 1;
 

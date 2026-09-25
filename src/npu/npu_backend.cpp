@@ -173,6 +173,7 @@ Backend& Backend::operator=(Backend&& o) noexcept {
     MV(packTarget_);
     o.packTarget_ = VK_NULL_HANDLE;
     MV(workerSh_);
+    MV(perfMode_);
     MV(verbose_);
     MV(dryRun_);
     MV(noSync_);
@@ -333,9 +334,10 @@ bool Backend::spawnWorker(const std::string& modelPath, const std::string& worke
         // worker binary directly. Contract: sh <script> <model> <bin> <sockfd>
         if (!workerSh_.empty()) {
             execl("/system/bin/sh", "sh", workerSh_.c_str(), model.c_str(),
-                  bin.c_str(), sf, (char*)0);
+                  bin.c_str(), sf, perfMode_.c_str(), (char*)0);
         } else {
-            execl(bin.c_str(), bin.c_str(), model.c_str(), sf, (char*)0);
+            execl(bin.c_str(), bin.c_str(), model.c_str(), sf,
+                  perfMode_.c_str(), (char*)0);
         }
         _exit(127);
 #else
@@ -353,7 +355,7 @@ bool Backend::spawnWorker(const std::string& modelPath, const std::string& worke
         char sf[16];
         snprintf(sf, sizeof sf, "%d", sv[1]);
         execl("/proc/1/root/apex/com.android.runtime/bin/linker64", "linker64",
-              bin.c_str(), model.c_str(), sf, (char*)0);
+              bin.c_str(), model.c_str(), sf, perfMode_.c_str(), (char*)0);
         _exit(127);
 #endif
     }

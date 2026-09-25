@@ -57,6 +57,10 @@ namespace Config {
         std::string worker_sh;
         /// FNV cross-check cadence in runs (0 = off after proof).
         long npu_verify_every{240};
+        /// HTP power/perf (QNN htp_performance_mode): burst|balanced|
+        /// power-saver|sustained_high_performance|...; forwarded to the
+        /// worker via the launch script.
+        std::string npu_perf_mode{"burst"};
         /// Per-frame stage logging (goes to lsfg.log on Android).
         bool npu_verbose{false};
         /// Passthrough: run skeleton/delivery without NPU work.

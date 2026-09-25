@@ -81,8 +81,9 @@ namespace {
             exit(EXIT_FAILURE);
         }
 
-        // load shaders (DLL path only; NPU framegen needs no Lossless.dll)
-        if (conf.npu_model.empty()) {
+        // load shaders (DLL path, and NPU fallback if the backend fails:
+        // skip only for pure-NPU setups without a DLL configured)
+        if (conf.npu_model.empty() || !conf.dll.empty()) {
             try {
                 Extract::extractShaders();
             } catch (const std::exception& e) {
