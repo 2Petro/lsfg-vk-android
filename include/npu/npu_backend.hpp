@@ -61,6 +61,10 @@ public:
     // HTP power/perf (QNN htp_performance_mode): burst|balanced|
     // power-saver|...; forwarded to the worker. Default burst.
     void setPerfMode(const std::string& m) { perfMode_ = m; }
+    // Cap NPU runs/sec (0 = uncapped). Enforced by pacing run starts on
+    // the present thread: e.g. 32 caps output delivery rhythm and saves
+    // power when the model outruns the display.
+    void setTargetInf(double t) { targetInf_ = t; }
 
     // Convert curSwapImage into NPU input slot (frameIdx%2); when frameIdx>=1
     // run the worker on the pair and pack the interpolated frame into
@@ -195,6 +199,8 @@ private:
     // TOML-driven behavior (see setters; defaults = production).
     std::string workerSh_;
     std::string perfMode_ = "burst";
+    double targetInf_ = 0;   // max runs/sec, 0 = uncapped
+    double lastRunStart_ = 0; // monotonic ms of last NPU run start
     bool verbose_ = false;
     bool dryRun_ = false;
     bool noSync_ = false;

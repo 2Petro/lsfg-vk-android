@@ -61,6 +61,9 @@ namespace Config {
         /// power-saver|sustained_high_performance|...; forwarded to the
         /// worker via the launch script.
         std::string npu_perf_mode{"burst"};
+        /// Cap NPU runs/sec (0 = uncapped). Paces run starts; e.g. 32
+        /// holds a steady rhythm and saves power past display rate.
+        double npu_target_inf{0};
         /// Per-frame stage logging (goes to lsfg.log on Android).
         bool npu_verbose{false};
         /// Passthrough: run skeleton/delivery without NPU work.

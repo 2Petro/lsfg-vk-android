@@ -18,6 +18,8 @@
 #include <cstdarg>
 #include <ctime>
 #include <string>
+#include <thread>
+#include <chrono>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
@@ -174,6 +176,8 @@ Backend& Backend::operator=(Backend&& o) noexcept {
     o.packTarget_ = VK_NULL_HANDLE;
     MV(workerSh_);
     MV(perfMode_);
+    MV(targetInf_);
+    MV(lastRunStart_);
     MV(verbose_);
     MV(dryRun_);
     MV(noSync_);
@@ -965,6 +969,21 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
 
     if (k < 1)
         return false; // need a pair before first run
+    // ---- inf cap: pace run starts to at most targetInf_/sec ----
+    if (targetInf_ > 0) {
+        double now = nowMs();
+        double minPeriod = 1000.0 / targetInf_;
+        if (lastRunStart_ > 0) {
+            double wait = minPeriod - (now - lastRunStart_);
+            if (wait > 0) {
+                NVLOG("frame %llu pacing sleep %.1fms", (unsigned long long)k,
+                      wait);
+                std::this_thread::sleep_for(
+                    std::chrono::duration<double, std::milli>(wait));
+            }
+        }
+        lastRunStart_ = nowMs();
+    }
     // ---- NPU run (socket ping-pong, wall-clock) ----
     double npuMs = 0;
     uint64_t wfnv = 0;
@@ -1142,14 +1161,18 @@ void Backend::report(bool final) {
         return;
     double wall = nowMs() - wall0_;
     double pure = (tFill_ + tNpu_ + tPresent_) / (runs_ ? runs_ : 1);
+    // PURE/work rate excludes pacing sleep; wall rate is what the display
+    // and power actually follow (equal when uncapped).
+    double wallAvg = runs_ ? wall / runs_ : 0;
     nlog("%s runs=%llu frames=%llu wall=%.0fms convert=%.2f npu=%.2f present=%.2f "
-         "sync=%.2f ms/frame PURE %.3fms = %.1f inf/sec winmax conv/npu/pres="
+         "sync=%.2f ms/frame PURE %.3fms = %.1f inf/sec (wall %.1fms = %.1f inf/sec) winmax conv/npu/pres="
          "%.1f/%.1f/%.1f FNV=0x%llx",
          final ? "FINAL" : "stats", (unsigned long long)runs_,
          (unsigned long long)frames_, wall, runs_ ? tFill_ / runs_ : 0,
          runs_ ? tNpu_ / runs_ : 0, runs_ ? tPresent_ / runs_ : 0,
          runs_ ? syncMs_ / runs_ : 0, pure,
-         pure > 0 ? 1000.0 / pure : 0, wConvMx_, wNpuMx_, wPresMx_,
+         pure > 0 ? 1000.0 / pure : 0, wallAvg,
+         wallAvg > 0 ? 1000.0 / wallAvg : 0, wConvMx_, wNpuMx_, wPresMx_,
          lastFnv_.load());
 }
 

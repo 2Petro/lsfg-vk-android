@@ -40,6 +40,23 @@ namespace {
             return VkPresentModeKHR::VK_PRESENT_MODE_IMMEDIATE_KHR;
         return VkPresentModeKHR::VK_PRESENT_MODE_FIFO_KHR;
     }
+
+    /// Numeric TOML knob accepting both integer and floating values.
+    /// (toml11 find_or<T> does not coerce int<->double; a plain
+    /// find_or<double> on `npu_target_inf = 32` silently keeps 0.0.)
+    double into_number(const toml::value& table, const std::string& key,
+                       double dflt) {
+        const auto& t = table.as_table();
+        auto it = t.find(key);
+        if (it == t.end())
+            return dflt;
+        const toml::value& v = it->second;
+        if (v.is_floating())
+            return v.as_floating();
+        if (v.is_integer())
+            return static_cast<double>(v.as_integer());
+        return dflt;
+    }
 }
 
 void Config::updateConfig(const std::string& file) {
@@ -86,6 +103,7 @@ void Config::updateConfig(const std::string& file) {
         .worker_sh = toml::find_or(globalTable, "worker_sh", std::string()),
         .npu_verify_every = toml::find_or(globalTable, "npu_verify_every", 240L),
         .npu_perf_mode = toml::find_or(globalTable, "npu_perf_mode", std::string("burst")),
+        .npu_target_inf = into_number(globalTable, "npu_target_inf", 0.0),
         .npu_verbose = toml::find_or(globalTable, "npu_verbose", false),
         .npu_dryrun = toml::find_or(globalTable, "npu_dryrun", false),
         .npu_nosync = toml::find_or(globalTable, "npu_nosync", false),
@@ -133,6 +151,7 @@ void Config::updateConfig(const std::string& file) {
             .worker_sh = toml::find_or(gameTable, "worker_sh", global.worker_sh),
             .npu_verify_every = toml::find_or(gameTable, "npu_verify_every", global.npu_verify_every),
             .npu_perf_mode = toml::find_or(gameTable, "npu_perf_mode", global.npu_perf_mode),
+            .npu_target_inf = into_number(gameTable, "npu_target_inf", global.npu_target_inf),
             .npu_verbose = toml::find_or(gameTable, "npu_verbose", global.npu_verbose),
             .npu_dryrun = toml::find_or(gameTable, "npu_dryrun", global.npu_dryrun),
             .npu_nosync = toml::find_or(gameTable, "npu_nosync", global.npu_nosync),
