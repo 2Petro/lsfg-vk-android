@@ -174,8 +174,14 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             this->useNpu = false;
         } else {
             std::cerr << "lsfg-vk: NPU backend ready (swap fmt=" << (int)srcFmt << ")\n";
-            // Model-size pack target (native res): TRANSFER_SRC for the
-            // delivery upscale blit + STORAGE for the pack compute write.
+            // Refine path (fp16 mid + full-res static/CAS): backend writes the
+            // refined frame straight into out_n, so skip the model-size pack
+            // target + blit (saves a blit, keeps quality). Env
+            // LSFG_NPU_NOREFINE=1 forces legacy pack.
+            if (this->npu_.refineActive()) {
+                this->hasPackTarget = false;
+                std::cerr << "lsfg-vk: NPU refine active (no packTarget blit)\n";
+            } else {
             VkExtent2D packExt{ (uint32_t)this->npu_.modelW(),
                                 (uint32_t)this->npu_.modelH() };
             int packFd = -1;
@@ -187,6 +193,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             this->hasPackTarget = true;
             std::cerr << "lsfg-vk: NPU pack target " << packExt.width << "x"
                       << packExt.height << "\n";
+            } // legacy pack (no refine)
         }
     }
     if (!this->useNpu) {

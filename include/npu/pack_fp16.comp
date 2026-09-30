@@ -1,0 +1,44 @@
+// pack_fp16.comp - fp16 planar NPU mid -> full-res storage image.
+// Same bindings/push as pack (binding0 u32 buf, binding1 image;
+// pc = inW,inH,dstW,dstH,swapRB). Bilinear upscale + optional RB swap.
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) readonly buffer Mid { uint m[]; };
+layout(binding = 1, rgba8) writeonly uniform image2D outImg;
+
+layout(push_constant) uniform PC {
+    uint MW; uint MH;
+    uint DW; uint DH;
+    uint swapRB;
+} pc;
+
+float chAt(int x, int y, int c) {
+    x = clamp(x, 0, int(pc.MW) - 1);
+    y = clamp(y, 0, int(pc.MH) - 1);
+    uint idx = uint(c) * pc.MW * pc.MH + uint(y) * pc.MW + uint(x);
+    uint u = m[idx >> 1u];
+    uint h = ((idx & 1u) == 0u) ? (u & 0xFFFFu) : (u >> 16u);
+    return unpackHalf2x16(h).x;
+}
+
+float chBilinear(vec2 p, int c) {
+    vec2 q = clamp(p, vec2(0.0), vec2(pc.MW - 1u, pc.MH - 1u));
+    ivec2 b = ivec2(floor(q));
+    vec2 f = q - vec2(b);
+    float v00 = chAt(b.x, b.y, c);
+    float v10 = chAt(b.x + 1, b.y, c);
+    float v01 = chAt(b.x, b.y + 1, c);
+    float v11 = chAt(b.x + 1, b.y + 1, c);
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
+
+void main() {
+    uint X = gl_GlobalInvocationID.x;
+    uint Y = gl_GlobalInvocationID.y;
+    if (X >= pc.DW || Y >= pc.DH) return;
+    vec2 mp = (vec2(X, Y) + 0.5) * vec2(pc.MW, pc.MH) / vec2(pc.DW, pc.DH) - 0.5;
+    vec3 v = vec3(chBilinear(mp, 0), chBilinear(mp, 1), chBilinear(mp, 2));
+    if (pc.swapRB != 0u) v = v.bgr;
+    imageStore(outImg, ivec2(X, Y), vec4(clamp(v, 0.0, 1.0), 1.0));
+}

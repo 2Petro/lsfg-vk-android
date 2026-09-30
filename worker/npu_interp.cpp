@@ -89,7 +89,7 @@ std::unordered_map<std::string, std::string> BuildQnnOptions(bool shared) {
         {"qnn_context_priority", "high"},
         {"rpc_control_latency", "100"},
         {"vtcm_mb", "8"},
-        {"htp_performance_mode", "burst"},
+        {"htp_performance_mode", "balanced"},
     };
     if (shared) opts["enable_htp_shared_memory_allocator"] = "1";
     return opts;

@@ -56,6 +56,7 @@ public:
     void setPackTarget(VkImage img) { packTarget_ = img; }
     int modelW() const { return inW_; }
     int modelH() const { return inH_; }
+    bool refineActive() const { return refineOn_; }
 
     bool alive() const { return ready_; }
     void report(bool final);
@@ -150,6 +151,26 @@ private:
     VkDescriptorPool packPool_ = VK_NULL_HANDLE;
     VkDescriptorSet packDs_ = VK_NULL_HANDLE;
     uint32_t packSwapRB_ = 0;
+    // fp16 model I/O (e.g. rife46_npu_320x240_fp16): convert writes half
+    // pairs, pack reads halves. Selected at runtime from worker sizes.
+    bool inFp16_ = false, outFp16_ = false;
+    VkPipeline convertFp16_ = VK_NULL_HANDLE;
+    VkPipeline packFp16_ = VK_NULL_HANDLE;
+    // Full-res refine (fp16 mid only): 2x swap-size RGBA history + pipes.
+    // On by default for fp16 models; LSFG_NPU_NOREFINE=1 keeps legacy pack.
+    bool refineOn_ = false;
+    Buf hist_[2];
+    size_t histSz_ = 0;
+    VkDescriptorSetLayout refineDsLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout refinePipeLayout_ = VK_NULL_HANDLE;
+    VkPipeline refinePipe_ = VK_NULL_HANDLE;
+    VkDescriptorPool refinePool_ = VK_NULL_HANDLE;
+    VkDescriptorSet refineDs_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout histDsLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout histPipeLayout_ = VK_NULL_HANDLE;
+    VkPipeline histPipe_ = VK_NULL_HANDLE;
+    VkDescriptorPool histPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet histDs_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
     Buf in_[2];
     Buf out_;

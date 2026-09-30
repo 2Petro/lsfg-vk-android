@@ -1,0 +1,30 @@
+// convert_fp16.comp - swap image -> fp16 NCHW NPU input (320x240 RIFE).
+// Same bindings/push as convert (binding0 sampled img, binding1 u32 buf;
+// pc = inW,inH,srcW,srcH). View swizzle already yields RGB; sampler LINEAR.
+// Each thread packs 2 adjacent x-pixels x 3 channels (no RMW races).
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D srcImg;
+layout(binding = 1) writeonly buffer Dst { uint d[]; };
+
+layout(push_constant) uniform PC {
+    uint MW; uint MH;
+    uint SW; uint SH;
+} pc;
+
+void main() {
+    uint X2 = gl_GlobalInvocationID.x;
+    uint Y = gl_GlobalInvocationID.y;
+    if (X2 * 2u >= pc.MW || Y >= pc.MH) return;
+    for (int c = 0; c < 3; c++) {
+        vec3 v0 = texture(srcImg, vec2((float(X2 * 2u) + 0.5) / float(pc.MW),
+                                       (float(Y) + 0.5) / float(pc.MH))).rgb;
+        vec3 v1 = texture(srcImg, vec2((float(X2 * 2u + 1u) + 0.5) / float(pc.MW),
+                                       (float(Y) + 0.5) / float(pc.MH))).rgb;
+        float f0 = (c == 0) ? v0.r : ((c == 1) ? v0.g : v0.b);
+        float f1 = (c == 0) ? v1.r : ((c == 1) ? v1.g : v1.b);
+        uint idx = uint(c) * pc.MW * pc.MH + Y * pc.MW + X2 * 2u;
+        d[idx >> 1u] = packHalf2x16(vec2(f0, f1));
+    }
+}
