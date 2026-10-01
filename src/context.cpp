@@ -134,7 +134,6 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         this->npu_.setNoSync(conf.npu_nosync);
         this->npu_.setVerifyEvery(conf.npu_verify_every);
         this->npu_.setPerfMode(conf.npu_perf_mode);
-        this->npu_.setTargetInf(conf.npu_target_inf);
         if (!this->npu_.init(info.device, info.physicalDevice,
                 info.queue.second, info.queue.first,
                 extent, srcFmt, conf.npu_model, conf.npu_bin,
@@ -142,8 +141,7 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
             std::cerr << "lsfg-vk: NPU backend failed, falling back to DLL path\n";
             this->useNpu = false;
         } else {
-            std::cerr << "lsfg-vk: NPU backend ready (swap fmt=" << (int)srcFmt
-                      << " targetInf=" << conf.npu_target_inf << ")\n";
+            std::cerr << "lsfg-vk: NPU backend ready (swap fmt=" << (int)srcFmt << ")\n";
         }
     }
     if (!this->useNpu) {
