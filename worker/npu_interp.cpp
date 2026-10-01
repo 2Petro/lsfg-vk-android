@@ -88,7 +88,8 @@ std::unordered_map<std::string, std::string> BuildQnnOptions(bool shared,
         {"htp_graph_finalization_optimization_mode", "3"},
         {"htp_arch", "73"},
         {"qnn_context_priority", "high"},
-        {"rpc_control_latency", "100"},
+        {"rpc_control_latency", "10000"},
+        {"htp_perf_mode_post_run", "power_saver"},
         {"vtcm_mb", "8"},
         {"htp_performance_mode", perfMode.empty() ? "burst" : perfMode},
     };
@@ -264,7 +265,7 @@ int main(int argc, char* argv[]) {
     Ort::RunOptions ro;
     ro.SetRunLogSeverityLevel(4);
     ro.SetRunLogVerbosityLevel(0);
-    ro.AddConfigEntry("qnn.rpc_control_latency", "100");
+    ro.AddConfigEntry("qnn.rpc_control_latency", "10000");
     for (int i = 0; i < 15; i++) session->Run(ro, bind); // warmup on zeros
     std::cerr << "[NPUW] warmup done\n";
 

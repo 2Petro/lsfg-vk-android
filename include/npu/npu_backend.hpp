@@ -72,6 +72,9 @@ public:
     // Pack-at-native: direct pack output into a model-size target (caller
     // upscales with a fixed-function blit). Set after init (dims known).
     void setPackTarget(VkImage img) { packTarget_ = img; }
+    void setRefine(bool b) { refineAllow_ = b; }
+    void setSharp(float s) { sharpQ_ = s; }
+    bool refineActive() const { return refineOn_; }
     int modelW() const { return inW_; }
     int modelH() const { return inH_; }
 
@@ -170,6 +173,28 @@ private:
     VkDescriptorPool packPool_ = VK_NULL_HANDLE;
     VkDescriptorSet packDs_ = VK_NULL_HANDLE;
     uint32_t packSwapRB_ = 0;
+    // fp16 model I/O (e.g. rife46_npu_320x240_fp16): half convert/pack,
+    // auto-selected from worker buffer sizes.
+    bool inFp16_ = false, outFp16_ = false;
+    VkPipeline convertFp16_ = VK_NULL_HANDLE;
+    VkPipeline packFp16_ = VK_NULL_HANDLE;
+    // Full-res refine (fp16 mid only): 2x swap-size RGBA history + pipes.
+    // TOML-driven via setRefine/setSharp; same single submit, no fences.
+    bool refineAllow_ = true;
+    float sharpQ_ = 0.35f;
+    bool refineOn_ = false;
+    Buf hist_[2];
+    size_t histSz_ = 0;
+    VkDescriptorSetLayout refineDsLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout refinePipeLayout_ = VK_NULL_HANDLE;
+    VkPipeline refinePipe_ = VK_NULL_HANDLE;
+    VkDescriptorPool refinePool_ = VK_NULL_HANDLE;
+    VkDescriptorSet refineDs_ = VK_NULL_HANDLE;
+    VkDescriptorSetLayout histDsLayout_ = VK_NULL_HANDLE;
+    VkPipelineLayout histPipeLayout_ = VK_NULL_HANDLE;
+    VkPipeline histPipe_ = VK_NULL_HANDLE;
+    VkDescriptorPool histPool_ = VK_NULL_HANDLE;
+    VkDescriptorSet histDs_[2] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
 
     Buf in_[2];
     Buf out_;

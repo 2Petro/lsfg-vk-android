@@ -134,6 +134,8 @@ LsContext::LsContext(const Hooks::DeviceInfo& info, VkSwapchainKHR swapchain,
         this->npu_.setNoSync(conf.npu_nosync);
         this->npu_.setVerifyEvery(conf.npu_verify_every);
         this->npu_.setPerfMode(conf.npu_perf_mode);
+        this->npu_.setRefine(conf.npu_refine);
+        this->npu_.setSharp((float)conf.npu_sharp);
         if (!this->npu_.init(info.device, info.physicalDevice,
                 info.queue.second, info.queue.first,
                 extent, srcFmt, conf.npu_model, conf.npu_bin,

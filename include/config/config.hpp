@@ -67,6 +67,11 @@ namespace Config {
         bool npu_dryrun{false};
         /// Skip DMA_BUF_SYNC ioctls around handoffs.
         bool npu_nosync{false};
+        /// Full-res RIFE refine (static composite + CAS) for fp16 mids.
+        /// True by default; false keeps the legacy direct pack.
+        bool npu_refine{true};
+        /// Refine sharpen strength (0 = unsharpened composite, cheaper).
+        double npu_sharp{0.35};
 
         /// Path to the configuration file.
         std::filesystem::path config_file;

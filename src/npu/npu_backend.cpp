@@ -10,6 +10,10 @@
 #include "npu/npu_backend.hpp"
 #include "npu/convert_spv.hpp"
 #include "npu/pack_spv.hpp"
+#include "npu/convert_fp16_spv.hpp"
+#include "npu/pack_fp16_spv.hpp"
+#include "npu/refine_spv.hpp"
+#include "npu/hist_store_spv.hpp"
 #include "layer.hpp"
 
 #include <cstdio>
@@ -154,6 +158,27 @@ Backend& Backend::operator=(Backend&& o) noexcept {
     MV(packPool_);
     MV(packDs_);
     MV(packSwapRB_);
+    MV(inFp16_);
+    MV(outFp16_);
+    MV(convertFp16_);
+    MV(packFp16_);
+    MV(refineAllow_);
+    MV(sharpQ_);
+    MV(refineOn_);
+    hist_[0] = o.hist_[0];
+    hist_[1] = o.hist_[1];
+    MV(histSz_);
+    MV(refineDsLayout_);
+    MV(refinePipeLayout_);
+    MV(refinePipe_);
+    MV(refinePool_);
+    MV(refineDs_);
+    MV(histDsLayout_);
+    MV(histPipeLayout_);
+    MV(histPipe_);
+    MV(histPool_);
+    histDs_[0] = o.histDs_[0];
+    histDs_[1] = o.histDs_[1];
     in_[0] = o.in_[0];
     in_[1] = o.in_[1];
     MV(out_);
@@ -213,6 +238,24 @@ Backend& Backend::operator=(Backend&& o) noexcept {
     o.packPipe_ = VK_NULL_HANDLE;
     o.packPool_ = VK_NULL_HANDLE;
     o.packDs_ = VK_NULL_HANDLE;
+    o.inFp16_ = o.outFp16_ = false;
+    o.convertFp16_ = VK_NULL_HANDLE;
+    o.packFp16_ = VK_NULL_HANDLE;
+    o.refineAllow_ = true;
+    o.sharpQ_ = 0.35f;
+    o.refineOn_ = false;
+    o.hist_[0] = o.hist_[1] = Buf{};
+    o.histSz_ = 0;
+    o.refineDsLayout_ = VK_NULL_HANDLE;
+    o.refinePipeLayout_ = VK_NULL_HANDLE;
+    o.refinePipe_ = VK_NULL_HANDLE;
+    o.refinePool_ = VK_NULL_HANDLE;
+    o.refineDs_ = VK_NULL_HANDLE;
+    o.histDsLayout_ = VK_NULL_HANDLE;
+    o.histPipeLayout_ = VK_NULL_HANDLE;
+    o.histPipe_ = VK_NULL_HANDLE;
+    o.histPool_ = VK_NULL_HANDLE;
+    o.histDs_[0] = o.histDs_[1] = VK_NULL_HANDLE;
     o.cmdPool_ = VK_NULL_HANDLE;
     o.cb_ = o.cb2_ = o.cb3_ = VK_NULL_HANDLE;
     o.fence_ = VK_NULL_HANDLE;
@@ -272,6 +315,28 @@ void Backend::release() {
         p_.DestroyDsLayout(dev_, packDsLayout_, nullptr);
     if (packPool_ && p_.DestroyDescPool)
         p_.DestroyDescPool(dev_, packPool_, nullptr);
+    if (convertFp16_ && p_.DestroyPipe)
+        p_.DestroyPipe(dev_, convertFp16_, nullptr);
+    if (packFp16_ && p_.DestroyPipe)
+        p_.DestroyPipe(dev_, packFp16_, nullptr);
+    freeBuf(hist_[0]);
+    freeBuf(hist_[1]);
+    if (refinePipe_ && p_.DestroyPipe)
+        p_.DestroyPipe(dev_, refinePipe_, nullptr);
+    if (refinePipeLayout_ && p_.DestroyPipeLayout)
+        p_.DestroyPipeLayout(dev_, refinePipeLayout_, nullptr);
+    if (refineDsLayout_ && p_.DestroyDsLayout)
+        p_.DestroyDsLayout(dev_, refineDsLayout_, nullptr);
+    if (refinePool_ && p_.DestroyDescPool)
+        p_.DestroyDescPool(dev_, refinePool_, nullptr);
+    if (histPipe_ && p_.DestroyPipe)
+        p_.DestroyPipe(dev_, histPipe_, nullptr);
+    if (histPipeLayout_ && p_.DestroyPipeLayout)
+        p_.DestroyPipeLayout(dev_, histPipeLayout_, nullptr);
+    if (histDsLayout_ && p_.DestroyDsLayout)
+        p_.DestroyDsLayout(dev_, histDsLayout_, nullptr);
+    if (histPool_ && p_.DestroyDescPool)
+        p_.DestroyDescPool(dev_, histPool_, nullptr);
     if (sampler_ && p_.DestroySampler)
         p_.DestroySampler(dev_, sampler_, nullptr);
     if (cmdPool_ && p_.DestroyPool)
@@ -579,6 +644,33 @@ bool Backend::setupGpu(VkExtent2D swapExtent, VkFormat swapFormat) {
     p_.DestroyShader(dev_, mod, nullptr);
     if (!ok)
         return fail("pipeline");
+    // fp16 I/O model (e.g. rife46_npu_320x240_fp16): half convert/pack,
+    // auto-selected from worker buffer sizes.
+    inFp16_ = (inSz_ == (size_t)inW_ * (size_t)inH_ * 3 * 2);
+    outFp16_ = (outSz_ == (size_t)outW_ * (size_t)outH_ * 3 * 2);
+    if (inFp16_) {
+        VkShaderModuleCreateInfo fsmi = {};
+        fsmi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        fsmi.codeSize = sizeof(kNpuConvertFp16Spv);
+        fsmi.pCode = kNpuConvertFp16Spv;
+        VkShaderModule fmod = VK_NULL_HANDLE;
+        bool fok = p_.CreateShader(dev_, &fsmi, nullptr, &fmod) == VK_SUCCESS;
+        if (fok) {
+            VkComputePipelineCreateInfo fcpi = {};
+            fcpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            fcpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            fcpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            fcpi.stage.module = fmod;
+            fcpi.stage.pName = "main";
+            fcpi.layout = pipeLayout_;
+            fok = p_.CreateCompute(dev_, VK_NULL_HANDLE, 1, &fcpi, nullptr,
+                                   &convertFp16_) == VK_SUCCESS;
+            p_.DestroyShader(dev_, fmod, nullptr);
+        }
+        if (!fok)
+            return fail("fp16 convert pipeline");
+        nlog("convert fp16 path (in %dx%d %zu bytes)", inW_, inH_, inSz_);
+    }
     VkDescriptorPoolSize psz[2] = {};
     psz[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     psz[0].descriptorCount = 2;
@@ -736,6 +828,203 @@ bool Backend::setupGpu(VkExtent2D swapExtent, VkFormat swapFormat) {
     p_.DestroyShader(dev_, pmod, nullptr);
     if (!pok)
         return fail("packpipeline");
+    if (outFp16_) {
+        VkShaderModuleCreateInfo fsmi2 = {};
+        fsmi2.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        fsmi2.codeSize = sizeof(kNpuPackFp16Spv);
+        fsmi2.pCode = kNpuPackFp16Spv;
+        VkShaderModule fmod2 = VK_NULL_HANDLE;
+        bool fok2 = p_.CreateShader(dev_, &fsmi2, nullptr, &fmod2) == VK_SUCCESS;
+        if (fok2) {
+            VkComputePipelineCreateInfo fcpi2 = {};
+            fcpi2.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            fcpi2.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            fcpi2.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            fcpi2.stage.module = fmod2;
+            fcpi2.stage.pName = "main";
+            fcpi2.layout = packPipeLayout_;
+            fok2 = p_.CreateCompute(dev_, VK_NULL_HANDLE, 1, &fcpi2, nullptr,
+                                    &packFp16_) == VK_SUCCESS;
+            p_.DestroyShader(dev_, fmod2, nullptr);
+        }
+        if (!fok2)
+            return fail("fp16 pack pipeline");
+        nlog("pack fp16 path (out %dx%d %zu bytes)", outW_, outH_, outSz_);
+    // Full-res refine (fp16 mid only). Env: LSFG_NPU_NOREFINE=1 -> legacy pack.
+    refineOn_ = (outFp16_ && refineAllow_);
+    if (refineOn_) {
+        histSz_ = (size_t)srcExt_.width * srcExt_.height * 4;
+        for (int h = 0; h < 2 && refineOn_; h++) {
+            VkBufferCreateInfo hbci = {};
+            hbci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            hbci.size = histSz_;
+            hbci.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                         VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+            hbci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+            if (p_.CreateBuffer(dev_, &hbci, nullptr, &hist_[h].b) != VK_SUCCESS)
+                { refineOn_ = false; break; }
+            VkMemoryRequirements hmr;
+            p_.GetBufMemReq(dev_, hist_[h].b, &hmr);
+            bool hok = false;
+            for (int pass = 0; pass < 2 && !hok; pass++) {
+                for (uint32_t t = 0; t < memProps.memoryTypeCount && !hok; t++) {
+                    if (!(hmr.memoryTypeBits & (1u << t))) continue;
+                    VkMemoryPropertyFlags fl = memProps.memoryTypes[t].propertyFlags;
+                    bool dev = (fl & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
+                    bool host = (fl & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+                    if (pass == 0 && (!dev || host)) continue;
+                    VkMemoryAllocateInfo hmai = {};
+                    hmai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+                    hmai.allocationSize = hmr.size;
+                    hmai.memoryTypeIndex = t;
+                    if (p_.AllocMem(dev_, &hmai, nullptr, &hist_[h].m) != VK_SUCCESS)
+                        continue;
+                    if (p_.BindBufMem(dev_, hist_[h].b, hist_[h].m, 0) != VK_SUCCESS) {
+                        p_.FreeMem(dev_, hist_[h].m, nullptr);
+                        hist_[h].m = VK_NULL_HANDLE;
+                        continue;
+                    }
+                    hok = true;
+                }
+            }
+            if (!hok) refineOn_ = false;
+        }
+    }
+    if (refineOn_) {
+        VkDescriptorSetLayoutBinding rbl[4] = {};
+        for (int i = 0; i < 3; i++) {
+            rbl[i].binding = i;
+            rbl[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            rbl[i].descriptorCount = 1;
+            rbl[i].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        }
+        rbl[3].binding = 3;
+        rbl[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        rbl[3].descriptorCount = 1;
+        rbl[3].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo rlci = {};
+        rlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        rlci.bindingCount = 4;
+        rlci.pBindings = rbl;
+        VkPushConstantRange rpc = {};
+        rpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        rpc.size = 24;
+        VkPipelineLayoutCreateInfo rpli = {};
+        rpli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        rpli.setLayoutCount = 1;
+        rpli.pSetLayouts = &refineDsLayout_;
+        rpli.pushConstantRangeCount = 1;
+        rpli.pPushConstantRanges = &rpc;
+        VkShaderModuleCreateInfo rsmi = {};
+        rsmi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        rsmi.codeSize = sizeof(kNpuRefineSpv);
+        rsmi.pCode = kNpuRefineSpv;
+        VkDescriptorSetLayoutBinding hbl[2] = {};
+        hbl[0].binding = 0;
+        hbl[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        hbl[0].descriptorCount = 1;
+        hbl[0].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        hbl[1].binding = 1;
+        hbl[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        hbl[1].descriptorCount = 1;
+        hbl[1].stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        VkDescriptorSetLayoutCreateInfo hlci = {};
+        hlci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        hlci.bindingCount = 2;
+        hlci.pBindings = hbl;
+        VkPushConstantRange hpc = {};
+        hpc.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        hpc.size = 12;
+        VkPipelineLayoutCreateInfo hpli = {};
+        hpli.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        hpli.setLayoutCount = 1;
+        hpli.pSetLayouts = &histDsLayout_;
+        hpli.pushConstantRangeCount = 1;
+        hpli.pPushConstantRanges = &hpc;
+        VkShaderModuleCreateInfo hsmi = {};
+        hsmi.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+        hsmi.codeSize = sizeof(kNpuHistSpv);
+        hsmi.pCode = kNpuHistSpv;
+        VkShaderModule rmod = VK_NULL_HANDLE, hmod = VK_NULL_HANDLE;
+        bool rok = p_.CreateDsLayout(dev_, &rlci, nullptr, &refineDsLayout_) == VK_SUCCESS &&
+                   p_.CreatePipeLayout(dev_, &rpli, nullptr, &refinePipeLayout_) == VK_SUCCESS &&
+                   p_.CreateShader(dev_, &rsmi, nullptr, &rmod) == VK_SUCCESS;
+        if (rok) {
+            VkComputePipelineCreateInfo rcpi = {};
+            rcpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            rcpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            rcpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            rcpi.stage.module = rmod;
+            rcpi.stage.pName = "main";
+            rcpi.layout = refinePipeLayout_;
+            rok = p_.CreateCompute(dev_, VK_NULL_HANDLE, 1, &rcpi, nullptr,
+                                   &refinePipe_) == VK_SUCCESS;
+            p_.DestroyShader(dev_, rmod, nullptr);
+        }
+        bool hok2 = rok &&
+                    p_.CreateDsLayout(dev_, &hlci, nullptr, &histDsLayout_) == VK_SUCCESS &&
+                    p_.CreatePipeLayout(dev_, &hpli, nullptr, &histPipeLayout_) == VK_SUCCESS &&
+                    p_.CreateShader(dev_, &hsmi, nullptr, &hmod) == VK_SUCCESS;
+        if (hok2) {
+            VkComputePipelineCreateInfo hcpi = {};
+            hcpi.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            hcpi.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            hcpi.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            hcpi.stage.module = hmod;
+            hcpi.stage.pName = "main";
+            hcpi.layout = histPipeLayout_;
+            hok2 = p_.CreateCompute(dev_, VK_NULL_HANDLE, 1, &hcpi, nullptr,
+                                    &histPipe_) == VK_SUCCESS;
+            p_.DestroyShader(dev_, hmod, nullptr);
+        }
+        VkDescriptorPoolSize rpsz[2] = {};
+        rpsz[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        rpsz[0].descriptorCount = 3;
+        rpsz[1].type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        rpsz[1].descriptorCount = 1;
+        VkDescriptorPoolCreateInfo rpci = {};
+        rpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        rpci.maxSets = 1;
+        rpci.poolSizeCount = 2;
+        rpci.pPoolSizes = rpsz;
+        VkDescriptorPoolSize hpsz[2] = {};
+        hpsz[0].type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        hpsz[0].descriptorCount = 2;
+        hpsz[1].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        hpsz[1].descriptorCount = 2;
+        VkDescriptorPoolCreateInfo hpci = {};
+        hpci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+        hpci.maxSets = 2;
+        hpci.poolSizeCount = 2;
+        hpci.pPoolSizes = hpsz;
+        VkDescriptorSetAllocateInfo raai = {};
+        raai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        raai.descriptorPool = refinePool_;
+        raai.descriptorSetCount = 1;
+        raai.pSetLayouts = &refineDsLayout_;
+        if (!(hok2 &&
+              p_.CreateDescPool(dev_, &rpci, nullptr, &refinePool_) == VK_SUCCESS &&
+              p_.CreateDescPool(dev_, &hpci, nullptr, &histPool_) == VK_SUCCESS)) {
+            refineOn_ = false;
+        } else {
+            raai.descriptorPool = refinePool_;
+            VkDescriptorSetAllocateInfo haai = raai;
+            haai.descriptorPool = histPool_;
+            haai.pSetLayouts = &histDsLayout_;
+            if (p_.AllocDescSets(dev_, &raai, &refineDs_) != VK_SUCCESS)
+                refineOn_ = false;
+            for (int s = 0; s < 2 && refineOn_; s++)
+                if (p_.AllocDescSets(dev_, &haai, &histDs_[s]) != VK_SUCCESS)
+                    refineOn_ = false;
+        }
+    }
+    if (refineOn_) {
+        nlog("refine on: fp16 mid + %ux%u static/CAS (hist %.1fMB)",
+             srcExt_.width, srcExt_.height, histSz_ * 2 / 1048576.0);
+    } else {
+        nlog("refine off (legacy pack)");
+    }
+    }
     VkDescriptorPoolSize ppsz[2] = {};
     ppsz[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     ppsz[0].descriptorCount = 1;
@@ -913,30 +1202,71 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
     p_.Barrier(cb_, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
                1, &b1);
-    p_.BindPipe(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, pipe_);
+    p_.BindPipe(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, inFp16_ ? convertFp16_ : pipe_);
     p_.BindDescSets(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, pipeLayout_, 0, 1,
                     &ds_[slot], 0, nullptr);
     uint32_t pc[4] = {(uint32_t)inW_, (uint32_t)inH_, srcExt_.width,
                       srcExt_.height};
     p_.PushConst(cb_, pipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 16, pc);
-    p_.Dispatch(cb_, (uint32_t)((inW_ + 15) / 16),
+    uint32_t cdx = inFp16_ ? (uint32_t)((inW_ / 2 + 15) / 16)
+                           : (uint32_t)((inW_ + 15) / 16);
+    p_.Dispatch(cb_, cdx,
                 (uint32_t)((inH_ + 15) / 16), 1);
+    // Refine history in the SAME submit (no extra fence): sample the
+    // current swap image (still SHADER_READ_ONLY) into hist_[slot].
+    if (refineOn_) {
+        VkDescriptorImageInfo hii = {};
+        hii.sampler = sampler_;
+        hii.imageView = view;
+        hii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkDescriptorBufferInfo hbi = {};
+        hbi.buffer = hist_[slot].b;
+        hbi.offset = 0;
+        hbi.range = histSz_;
+        VkWriteDescriptorSet hwds[2] = {};
+        hwds[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        hwds[0].dstSet = histDs_[slot];
+        hwds[0].dstBinding = 0;
+        hwds[0].descriptorCount = 1;
+        hwds[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        hwds[0].pImageInfo = &hii;
+        hwds[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        hwds[1].dstSet = histDs_[slot];
+        hwds[1].dstBinding = 1;
+        hwds[1].descriptorCount = 1;
+        hwds[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        hwds[1].pBufferInfo = &hbi;
+        p_.UpdateDesc(dev_, 2, hwds, 0, nullptr);
+        p_.BindPipe(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, histPipe_);
+        p_.BindDescSets(cb_, VK_PIPELINE_BIND_POINT_COMPUTE, histPipeLayout_, 0, 1,
+                        &histDs_[slot], 0, nullptr);
+        uint32_t hpc[3] = {srcExt_.width, srcExt_.height, 0};
+        p_.PushConst(cb_, histPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 12, hpc);
+        p_.Dispatch(cb_, (srcExt_.width + 15) / 16, (srcExt_.height + 15) / 16, 1);
+    }
     b2 = b1;
     b2.oldLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     b2.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     b2.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
     b2.dstAccessMask = 0;
-    VkBufferMemoryBarrier bbIn = {};
-    bbIn.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
-    bbIn.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    bbIn.dstAccessMask = 0;
-    bbIn.srcQueueFamilyIndex = bbIn.dstQueueFamilyIndex =
+    VkBufferMemoryBarrier bbIn[2] = {};
+    bbIn[0].sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    bbIn[0].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    bbIn[0].dstAccessMask = 0;
+    bbIn[0].srcQueueFamilyIndex = bbIn[0].dstQueueFamilyIndex =
         VK_QUEUE_FAMILY_IGNORED;
-    bbIn.buffer = in_[slot].b;
-    bbIn.offset = 0;
-    bbIn.size = inSz_;
+    bbIn[0].buffer = in_[slot].b;
+    bbIn[0].offset = 0;
+    bbIn[0].size = inSz_;
+    uint32_t nbb = 1;
+    if (refineOn_) {
+        bbIn[1] = bbIn[0];
+        bbIn[1].buffer = hist_[slot].b;
+        bbIn[1].size = histSz_;
+        nbb = 2;
+    }
     p_.Barrier(cb_, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &bbIn, 1,
+               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, nbb, bbIn, 1,
                &b2);
     if (p_.EndCb(cb_) != VK_SUCCESS)
         return false;
@@ -996,6 +1326,38 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
     VkImageView pv = packViewFor(packDst, outFmt_);
     if (pv == VK_NULL_HANDLE)
         return false;
+    bool useRefine = (refineOn_ && packTarget_ == VK_NULL_HANDLE);
+    if (useRefine) {
+        VkDescriptorBufferInfo rbi[3] = {};
+        rbi[0].buffer = out_.b;
+        rbi[0].offset = 0;
+        rbi[0].range = outSz_;
+        rbi[1].buffer = hist_[slot ^ 1].b;
+        rbi[1].offset = 0;
+        rbi[1].range = histSz_;
+        rbi[2].buffer = hist_[slot].b;
+        rbi[2].offset = 0;
+        rbi[2].range = histSz_;
+        VkDescriptorImageInfo rii = {};
+        rii.imageView = pv;
+        rii.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+        VkWriteDescriptorSet rwds[4] = {};
+        for (int i = 0; i < 3; i++) {
+            rwds[i].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            rwds[i].dstSet = refineDs_;
+            rwds[i].dstBinding = i;
+            rwds[i].descriptorCount = 1;
+            rwds[i].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            rwds[i].pBufferInfo = &rbi[i];
+        }
+        rwds[3].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        rwds[3].dstSet = refineDs_;
+        rwds[3].dstBinding = 3;
+        rwds[3].descriptorCount = 1;
+        rwds[3].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        rwds[3].pImageInfo = &rii;
+        p_.UpdateDesc(dev_, 4, rwds, 0, nullptr);
+    } else {
     VkDescriptorBufferInfo pbi = {};
     pbi.buffer = out_.b;
     pbi.offset = 0;
@@ -1017,6 +1379,7 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
     pwds[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
     pwds[1].pImageInfo = &pii;
     p_.UpdateDesc(dev_, 2, pwds, 0, nullptr);
+    }
     if (p_.ResetCmd)
         p_.ResetCmd(cb2_, 0);
     if (p_.BeginCb(cb2_, &bbi) != VK_SUCCESS)
@@ -1056,7 +1419,22 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
                    : (VkPipelineStageFlags)VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr, 0, nullptr,
                1, &pb);
-    p_.BindPipe(cb2_, VK_PIPELINE_BIND_POINT_COMPUTE, packPipe_);
+    if (useRefine) {
+        p_.BindPipe(cb2_, VK_PIPELINE_BIND_POINT_COMPUTE, refinePipe_);
+        p_.BindDescSets(cb2_, VK_PIPELINE_BIND_POINT_COMPUTE, refinePipeLayout_, 0, 1,
+                        &refineDs_, 0, nullptr);
+        struct { uint32_t mw, mh, fw, fh; float sharp; uint32_t swap; } rpc;
+        rpc.mw = (uint32_t)inW_;
+        rpc.mh = (uint32_t)inH_;
+        rpc.fw = srcExt_.width;
+        rpc.fh = srcExt_.height;
+        rpc.sharp = sharpQ_;
+        rpc.swap = packSwapRB_;
+        p_.PushConst(cb2_, refinePipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 24,
+                     &rpc);
+        p_.Dispatch(cb2_, (srcExt_.width + 15) / 16, (srcExt_.height + 15) / 16, 1);
+    } else {
+    p_.BindPipe(cb2_, VK_PIPELINE_BIND_POINT_COMPUTE, outFp16_ ? packFp16_ : packPipe_);
     p_.BindDescSets(cb2_, VK_PIPELINE_BIND_POINT_COMPUTE, packPipeLayout_, 0, 1,
                     &packDs_, 0, nullptr);
     // pack shader maps NPU out (inW/inH) to the pack target extent.
@@ -1065,6 +1443,7 @@ bool Backend::generate(VkImage curSwapImage, VkImage outImage,
     p_.PushConst(cb2_, packPipeLayout_, VK_SHADER_STAGE_COMPUTE_BIT, 0, 20,
                  ppc);
     p_.Dispatch(cb2_, (packExt.width + 15) / 16, (packExt.height + 15) / 16, 1);
+    }
     pb.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
     pb.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     pb.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;

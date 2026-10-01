@@ -1,0 +1,125 @@
+// refine_full.comp - RIFE NPU refine for lsfg-vk (fp16 320x240 model).
+// mid: planar fp16 [3,MH,MW] in NPU-out dma buffer (raw half bytes).
+// A,B: full-res RGBA8 packed buffers (prev/cur swap copies).
+// out: full-res storage image = static ? orig_avg : bilinear_up(mid), + CAS.
+// Diff-only mask; 4-tap feather; static early-out (skip CAS, ~70% pixels).
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) readonly buffer Mid { uint m[]; };
+layout(binding = 1) readonly buffer ImgA { uint a[]; };
+layout(binding = 2) readonly buffer ImgB { uint b[]; };
+layout(binding = 3, rgba8) writeonly uniform image2D outImg;
+
+layout(push_constant) uniform PC {
+    uint MW; uint MH;
+    uint FW; uint FH;
+    float sharp;
+    uint swapRB;
+} pc;
+
+vec3 midAt(int x, int y, int c) {
+    x = clamp(x, 0, int(pc.MW) - 1);
+    y = clamp(y, 0, int(pc.MH) - 1);
+    uint idx = uint(c) * pc.MW * pc.MH + uint(y) * pc.MW + uint(x);
+    uint u = m[idx >> 1u];
+    uint h = ((idx & 1u) == 0u) ? (u & 0xFFFFu) : (u >> 16u);
+    float v = unpackHalf2x16(h).x;
+    return vec3(v, 0.0, 0.0);
+}
+
+vec3 midBilinear(vec2 p, int c) {
+    vec2 q = clamp(p, vec2(0.0), vec2(pc.MW - 1u, pc.MH - 1u));
+    ivec2 b = ivec2(floor(q));
+    vec2 f = q - vec2(b);
+    vec3 v00 = midAt(b.x, b.y, c);
+    vec3 v10 = midAt(b.x + 1, b.y, c);
+    vec3 v01 = midAt(b.x, b.y + 1, c);
+    vec3 v11 = midAt(b.x + 1, b.y + 1, c);
+    return mix(mix(v00, v10, f.x), mix(v01, v11, f.x), f.y);
+}
+
+vec3 rgba(uint u) {
+    // History holds RGB already (view swizzle); no swap on load.
+    // The one RB swap happens on store (see below).
+    return vec3(float(u & 0xFFu), float((u >> 8u) & 0xFFu),
+                float((u >> 16u) & 0xFFu)) * (1.0 / 255.0);
+}
+
+void main() {
+    uint X = gl_GlobalInvocationID.x;
+    uint Y = gl_GlobalInvocationID.y;
+    if (X >= pc.FW || Y >= pc.FH) return;
+    uint fi = Y * pc.FW + X;
+
+    vec3 A = rgba(a[fi]);
+    vec3 B = rgba(b[fi]);
+
+    vec2 mp = (vec2(X, Y) + 0.5) * vec2(pc.MW, pc.MH) / vec2(pc.FW, pc.FH) - 0.5;
+    vec3 M;
+    M.r = midBilinear(mp, 0).r;
+    M.g = midBilinear(mp, 1).r;
+    M.b = midBilinear(mp, 2).r;
+
+    float d = abs(dot(A - B, vec3(0.299, 0.587, 0.114)));
+    float s = (d < 8.0 / 255.0) ? 1.0 : 0.0;
+
+    float s2 = s;
+    {
+        int cnt = 1;
+        float acc = s;
+        ivec2 o[4] = ivec2[4](ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2));
+        for (int k = 0; k < 4; ++k) {
+            ivec2 np_ = ivec2(X, Y) + o[k];
+            if (np_.x >= 0 && np_.y >= 0 && np_.x < int(pc.FW) && np_.y < int(pc.FH)) {
+                uint ni = uint(np_.y) * pc.FW + uint(np_.x);
+                vec3 A2 = rgba(a[ni]);
+                vec3 B2 = rgba(b[ni]);
+                float d2 = abs(dot(A2 - B2, vec3(0.299, 0.587, 0.114)));
+                acc += (d2 < 8.0 / 255.0) ? 1.0 : 0.0;
+                cnt++;
+            }
+        }
+        s2 = acc / float(cnt);
+    }
+
+    vec3 comp = mix(M, (A + B) * 0.5, s2);
+
+    if (s2 > 0.99) {
+        vec4 c = vec4(comp, 1.0);
+        imageStore(outImg, ivec2(X, Y), (pc.swapRB != 0u) ? c.bgra : c);
+        return;
+    }
+
+    vec3 up = comp;
+    {
+        ivec2 o[4] = ivec2[4](ivec2(1, 0), ivec2(-1, 0), ivec2(0, 1), ivec2(0, -1));
+        vec3 nsum = vec3(0.0);
+        vec3 mn = vec3(1e9), mx = vec3(-1e9);
+        for (int k = 0; k < 4; ++k) {
+            ivec2 np_ = ivec2(int(X) + o[k].x, int(Y) + o[k].y);
+            np_.x = clamp(np_.x, 0, int(pc.FW) - 1);
+            np_.y = clamp(np_.y, 0, int(pc.FH) - 1);
+            uint ni = uint(np_.y) * pc.FW + uint(np_.x);
+            vec3 A2 = rgba(a[ni]);
+            vec3 B2 = rgba(b[ni]);
+            vec2 mp2 = (vec2(np_) + 0.5) * vec2(pc.MW, pc.MH) / vec2(pc.FW, pc.FH) - 0.5;
+            vec3 M2;
+            M2.r = midBilinear(mp2, 0).r;
+            M2.g = midBilinear(mp2, 1).r;
+            M2.b = midBilinear(mp2, 2).r;
+            float d2 = abs(dot(A2 - B2, vec3(0.299, 0.587, 0.114)));
+            vec3 c2 = mix(M2, (A2 + B2) * 0.5, (d2 < 8.0 / 255.0) ? 1.0 : 0.0);
+            nsum += c2;
+            mn = min(mn, c2);
+            mx = max(mx, c2);
+        }
+        vec3 avg = nsum * 0.25;
+        float w = clamp(abs(dot(up - avg, vec3(0.299, 0.587, 0.114))) * 8.0, 0.0, 1.0) * pc.sharp;
+        up = up + (up - avg) * 1.5 * w;
+        up = clamp(up, mn, mx);
+    }
+
+    vec4 co = vec4(clamp(up, 0.0, 1.0), 1.0);
+    imageStore(outImg, ivec2(X, Y), (pc.swapRB != 0u) ? co.bgra : co);
+}

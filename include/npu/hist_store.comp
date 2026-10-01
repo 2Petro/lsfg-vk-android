@@ -1,0 +1,25 @@
+// hist_store.comp - full-res swap -> RGBA8 history buffer (exact bytes).
+// texelFetch (no filtering); optional RB swap. Runs in the convert submit
+// right after downscale: source already SHADER_READ_ONLY, no layout change.
+#version 450
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(binding = 0) uniform sampler2D srcImg;
+layout(binding = 1) writeonly buffer Hist { uint h[]; };
+
+layout(push_constant) uniform PC {
+    uint FW; uint FH;
+    uint swapRB;
+} pc;
+
+void main() {
+    uint X = gl_GlobalInvocationID.x;
+    uint Y = gl_GlobalInvocationID.y;
+    if (X >= pc.FW || Y >= pc.FH) return;
+    vec4 v = texelFetch(srcImg, ivec2(X, Y), 0);
+    uvec3 q = uvec3(clamp(v.rgb, 0.0, 1.0) * 255.0 + 0.5);
+    if (pc.swapRB != 0u) {
+        uint t = q.r; q.r = q.b; q.b = t;
+    }
+    h[Y * pc.FW + X] = q.r | (q.g << 8u) | (q.b << 16u) | (255u << 24u);
+}
